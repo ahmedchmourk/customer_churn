@@ -1,0 +1,30 @@
+# Usage (from repo root):   docker compose -f docker/docker-compose.yml up --build
+# Then open http://localhost:3000
+name: bank-churn-ltv
+
+services:
+  analytics:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.analytics
+    environment:
+      N_CUSTOMERS: ${N_CUSTOMERS:-10000}
+      SEED: ${SEED:-42}
+    volumes:
+      - ../data:/workspace/data        # raw + processed CSV extracts
+      - ../app/data:/workspace/app/data # dashboard semantic model (JSON)
+
+  web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.web
+    depends_on:
+      analytics:
+        condition: service_completed_successfully
+    environment:
+      DATA_DIR: /app/data
+    volumes:
+      - ../app/data:/app/data:ro
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
