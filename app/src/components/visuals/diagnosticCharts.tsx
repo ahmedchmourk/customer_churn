@@ -32,7 +32,7 @@ import { VisualContainer } from "./VisualContainer";
 const pctTick = (v: number) => `${Math.round(v * 100)}%`;
 
 // ---------------------------------------------------------------------------
-// Key influencers (simulated Power BI AI visual)
+// Key influencers (lift analysis visual)
 // ---------------------------------------------------------------------------
 export function KeyInfluencers({ className }: { className?: string }) {
   const id = "key-influencers";

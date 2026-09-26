@@ -1,11 +1,124 @@
-# Retail Bank Customer Churn & Lifetime Value (LTV) Diagnostic Analytics Dashboard
+# Retail Bank Customer Churn & Lifetime Value (LTV) Diagnostic Analytics
 
-An end-to-end churn analytics project on **real customer data**: the Kaggle *Bank Customer Churn* dataset, with 10,000 customers of a European retail bank.
+An end-to-end churn analytics project on **real customer data**: the Kaggle *Bank Customer Churn* dataset, with 10,000 customers of a European retail bank. The questions it answers:
 
-- A **Python engine** (pandas · scipy · lifelines · scikit-learn) validates the data, audits it for target leakage, tests churn drivers, runs survival analysis, compares churn models and scores lifetime value.
-- A **Next.js "Power BI Web Simulator"** presents the results in a report that looks and behaves like the Power BI Service. It runs on localhost and needs no Power BI licence.
+1. **How big is the problem?** Attrition rate, lost balances, revenue at risk.
+2. **Why do customers leave?** Statistical testing, survival analysis, predictive modelling.
+3. **What should the bank do about it?** Value-based targeting, retention actions and ROI scenarios.
 
-![Executive Attrition Overview](docs/screenshots/01-executive-overview.png)
+**Stack:** Python (pandas · SciPy · lifelines · scikit-learn) for analytics · Next.js / React / TypeScript / Recharts for the interactive dashboard · Docker Compose for one-command reproducibility.
+
+![KPI summary](docs/charts/01-kpi-summary.png)
+
+---
+
+## Key findings
+
+| # | Finding | Evidence |
+|---|---|---|
+| 1 | **Product holding is the #1 churn driver.** Customers with 3–4 products churn at 83–100%; 2-product customers at only 7.6% | χ² Cramér's V = 0.39 · top permutation importance |
+| 2 | **Middle age is the risk zone.** Churn peaks at 56% for ages 50–59, versus 8% for under-30s | Welch t-test, Cohen's d = 0.74 |
+| 3 | **Germany churns at 2x** France and Spain (32% vs 16–17%) | χ² p < 0.001 · log-rank p < 0.001 |
+| 4 | **Inactive members churn at 1.9x** the rate of active members | χ² p < 0.001 · 5-year retention 82% vs 89% |
+| 5 | **Some columns carry no signal:** tenure, credit score, salary, card type, satisfaction and loyalty points | Bonferroni-adjusted p ≈ 1 |
+| 6 | **`Complain` is target leakage.** It matches the churn outcome 99.9% of the time, so it's excluded from the model | Single-feature ROC-AUC = 0.998 |
+| 7 | **The churn model ranks risk well:** gradient boosting reaches ROC-AUC **0.862** (logistic regression 0.842) | 5-fold stratified out-of-fold validation |
+
+---
+
+## 1 · Executive attrition overview
+
+### Attrition by geography & age tier
+German customers churn at twice the rate of other markets in every age band. The 50–59 tier is the highest-risk group in all three countries.
+
+![Attrition by geography and age tier](docs/charts/02-attrition-geography-age.png)
+
+### Product holding distribution
+Almost all customers hold 1 or 2 products. The small group holding 3–4 products churns almost entirely, which points to mis-selling or product fatigue. Two products is the sweet spot at 7.6% churn.
+
+![Product holding distribution](docs/charts/03-product-holding.png)
+
+### Retention heatmap (Kaplan-Meier by tenure year)
+This shows the share of each segment still banking after N years, estimated with Kaplan-Meier so that customers who are still active are counted correctly. The toggle switches the segment between age, country, products, activity and gender. Customers aged 50–59 fall to **8% retention by year 10**, while under-30s stay at 76%.
+
+![Retention heatmap](docs/charts/04-retention-heatmap.png)
+
+### Attrition by tenure
+Attrition is flat at around 20% across tenure years. How long someone has been a customer doesn't protect against churn in this bank. The t-test confirms it (p ≈ 1).
+
+![Attrition by tenure](docs/charts/05-attrition-by-tenure.png)
+
+---
+
+## 2 · Diagnostic & root-cause analytics
+
+### Key influencers
+Each factor's churn lift versus all other customers, tested with a two-proportion z-test (p < 0.05). Holding 3 or more products makes churn **4.7x** more likely. Being aged 50–59 raises it 3.3x, being in Germany 2.0x, and being inactive 1.9x. The *Top segments* tab combines conditions to find the highest-risk customer groups.
+
+![Key influencers](docs/charts/06-key-influencers.png)
+
+### Kaplan-Meier survival curves
+Retention over tenure with 95% confidence bands, fitted with `lifelines`. Five-year retention is 89% for active members vs 82% for inactive members. By product count it's 95% for 2 products vs 49% for 3 products. Every segment split is significant under a multivariate log-rank test.
+
+![Kaplan-Meier survival](docs/charts/07-kaplan-meier-survival.png)
+
+### Age vs. account balance
+Churn concentrates among customers aged 45–64 with balances of $50K or more. That zone churns at **53%**, over 2.5x the portfolio average. These are exactly the customers the bank can least afford to lose.
+
+![Age vs balance](docs/charts/08-age-vs-balance.png)
+
+### Pareto: lost revenue concentration
+Churned accounts ranked by annual revenue. The top 20% of churned accounts drive 32% of lost revenue. The loss is spread fairly broadly, so a campaign aimed only at premium accounts would miss most of the loss.
+
+![Pareto of lost revenue](docs/charts/09-pareto-revenue-loss.png)
+
+### Statistical hypothesis testing
+χ² independence tests (with Cramér's V) for categorical drivers and Welch t-tests (with Cohen's d) for numeric drivers. P-values are Bonferroni-adjusted across all 15 tests. The leakage audit flags `Complain` as a post-outcome field.
+
+![Hypothesis tests](docs/charts/10-hypothesis-tests.png)
+
+---
+
+## 3 · Prescriptive retention & what-if planning
+
+### What-if planner
+Set a churn-reduction target for each value tier and a risk threshold for targeting. The planner recalculates in real time:
+- The number of accounts targeted.
+- Revenue saved over 12 months.
+- The **LTV uplift** from lower churn probability.
+- Campaign cost and programme ROI.
+
+![What-if planner](docs/charts/11-what-if-planner.png)
+
+### High-value at-risk accounts
+Silver-tier and above accounts whose churn probability passes the threshold. Each one has a recommended retention action and its expected value saved. The table is sortable and searchable, and clicking a row opens the customer detail view.
+
+![At-risk accounts](docs/charts/12-at-risk-accounts.png)
+
+### Customer detail
+A single-customer view:
+- Profile and churn-probability gauge.
+- The risk factors that apply to this customer.
+- A comparison against retained and churned averages.
+- The recommended action, with its save rate, cost and net expected value.
+
+![Customer drill-through](docs/charts/13-customer-drillthrough.png)
+
+---
+
+## Methodology
+
+| Step | Detail |
+|---|---|
+| **0 · Ingestion & data quality** | Maps Kaggle columns to the engine schema and drops `RowNumber` and `Surname`. Checks nulls, duplicate IDs and value ranges; all pass. |
+| **1 · Feature engineering** | Age tiers, tenure in months (tenure is recorded in whole years; year 0 is placed at 6 months), and a zero-balance flag. **Annual revenue** = 2.1% net interest margin on balance + $85 per product + card fee by card type + 0.35% yield on salary flows. |
+| **2 · Leakage audit** | Single-feature ROC-AUC for every column. Any column at 0.95 or above is flagged and excluded from modelling. |
+| **3 · Hypothesis testing** | χ² with Cramér's V and Welch t-tests with Cohen's d across 15 drivers, Bonferroni-corrected. |
+| **4 · Survival analysis** | Kaplan-Meier with 95% CIs, overall and by segment, plus multivariate log-rank tests. |
+| **5 · Propensity modelling** | Logistic regression vs. histogram gradient boosting on 5-fold stratified **out-of-fold** predictions, so every customer is scored by a model that never saw them. The better model is used for scoring. Logistic odds ratios and permutation importance are exported for interpretability. |
+| **6 · LTV & risk scoring** | `LTV = m·r / (1 + d − r)`, where m = annual margin (62%), r = 1 − churn probability and d = 10%. Also produces at-risk revenue, risk tiers (Low → Critical), revenue-based value tiers (Bronze → Platinum) and a rule-based next-best retention action. |
+
+The interactive measures (attrition %, KM retention, key-influencer lift, Pareto, what-if) are recalculated in the browser for the current filter selection. So every slicer and chart click updates all visuals instantly.
 
 ---
 
@@ -15,175 +128,65 @@ An end-to-end churn analytics project on **real customer data**: the Kaggle *Ban
 |---|---|
 | **Dataset** | [Bank Customer Churn · Kaggle (radheshyamkollipara)](https://www.kaggle.com/datasets/radheshyamkollipara/bank-customer-churn) |
 | **File** | `Customer-Churn-Records.csv`: 10,000 rows × 18 columns |
-| **Target** | `Exited` (1 = the customer left the bank). Attrition rate is **20.38%** |
-| **Quality** | No nulls, no duplicate customer IDs, no out-of-range values (checked on every run) |
+| **Target** | `Exited` (1 = left the bank). Attrition rate 20.38% |
 
-`scripts/fetch_kaggle_data.py` downloads the file from Kaggle's public API, validates the schema and row count, and prints a SHA-256 fingerprint. The dataset has no explicit redistribution licence, so **the raw file and its row-level derivatives are git-ignored**. They're fetched when the pipeline runs, and only code and aggregate screenshots live in this repo. `Surname` and `RowNumber` are dropped on ingestion.
+`scripts/fetch_kaggle_data.py` downloads the file from Kaggle's public API and validates the schema and row count. The dataset has no explicit redistribution licence, so **the raw file and its per-customer outputs aren't committed**. They're downloaded when the pipeline runs.
 
-## Key findings
+### Data dictionary
 
-| Finding | Evidence |
+| Kaggle column | Description |
 |---|---|
-| **Product holding is the #1 driver.** 3–4 products churn at 83–100%; 2 products at only 7.6% | χ² Cramér's V 0.39 · top permutation importance |
-| **Middle age is the risk zone.** Churn peaks at 56% for ages 50–59 | Welch t (Cohen's d 0.74) · the model's quadratic age term |
-| **Germany churns at 2x** France and Spain (32% vs 16–17%) | χ² p < 0.001 · log-rank p < 0.001 |
-| **Inactive members churn at 1.9x** active ones | χ² V 0.16 · log-rank p < 0.001 |
-| **Some columns carry no signal:** tenure, credit score, salary, card type, satisfaction score and loyalty points | Bonferroni-adjusted p ≈ 1 |
-| **`Complain` is target leakage.** It matches `Exited` 99.9% of the time (single-feature ROC-AUC 0.998) | The leakage audit flags it and the engine excludes it from the model |
+| `CustomerId` | Anonymous customer identifier |
+| `CreditScore`, `Geography`, `Gender`, `Age` | Demographics and credit quality (France / Germany / Spain) |
+| `Tenure` | Years as a customer; used as the survival duration |
+| `Balance`, `NumOfProducts`, `HasCrCard`, `IsActiveMember`, `EstimatedSalary` | Account and product holdings |
+| `Card Type`, `Point Earned` | Card tier and loyalty points |
+| `Satisfaction Score` | 1–5 rating of complaint resolution |
+| `Complain` | Complaint logged. **Target leakage; excluded from the model** |
+| `Exited` | Target: 1 = churned |
 
-The last finding matters. Keeping `Complain` would give a "99.8% accurate" model that is useless in production, because the complaint is recorded at or after exit. The engine detects this automatically, and the dashboard flags it in the hypothesis-testing table.
-
----
-
-## Analytics pipeline
-
-| Step | What it does |
-|---|---|
-| **0 · Ingestion & data quality** | Maps Kaggle columns to the engine schema, drops personal and index columns, and checks nulls, duplicates and value ranges (`model.json → data_quality`). |
-| **1 · Feature engineering** | Age tiers, tenure in months (Kaggle records whole years; year 0 → 6 months), zero-balance flag, and **annual revenue**: 2.1% NIM on balance + $85 per product + card fee by card type + 0.35% salary-flow yield. |
-| **2 · Leakage audit** | Single-feature ROC-AUC for every column. Anything ≥ 0.95 is flagged and excluded from modelling. |
-| **3 · Hypothesis testing** | χ² independence tests with Cramér's V, and Welch t-tests with Cohen's d, across 15 drivers. P-values are Bonferroni-adjusted. |
-| **4 · Survival analysis** | `lifelines` Kaplan-Meier retention over tenure with 95% CIs, overall and by active status, geography, products, age tier and gender, plus multivariate log-rank tests. |
-| **5 · Propensity models** | Logistic regression vs. gradient boosting, compared on **5-fold stratified out-of-fold** predictions. The winner (gradient boosting, ROC-AUC **0.862**; logistic 0.842) scores every customer on data it never saw. Logistic odds ratios and permutation importance are exported for interpretability. |
-| **6 · LTV & risk scoring** | `LTV = m·r / (1 + d − r)` with r = 1 − churn probability and d = 10%. Also computes at-risk revenue, risk tiers, revenue-based value tiers, and a rule-based next-best retention action. |
-
-The financial assumptions (NIM, fees, margin, discount rate) are published in `model.json → assumptions`. They're illustrative, because the dataset doesn't contain revenue.
-
-## Report pages
-
-1. **Executive Attrition Overview**
-   - KPI cards.
-   - Attrition by geography × age tier (click to cross-filter).
-   - Product-holding small multiples.
-   - **Kaplan-Meier retention heatmap** by segment and tenure year.
-   - Attrition by tenure.
-2. **Diagnostic & Root-Cause Analytics**
-   - Simulated **Key Influencers** visual: lift with two-proportion z-tests, plus *Top segments*.
-   - KM survival curves with CI bands.
-   - Age vs. balance churn-concentration scatter.
-   - Pareto of lost revenue.
-   - Hypothesis-testing table with the leakage flag.
-3. **Prescriptive Retention & What-If Planner**
-   - Per-tier churn-reduction sliders and a targeting threshold.
-   - Live revenue saved, LTV uplift, cost and ROI.
-   - Savings by action.
-   - Sortable **drill-through table** of high-value at-risk accounts.
-4. **Customer Drill-through** (hidden page)
-   - Profile, churn-probability gauge and active risk drivers.
-   - Benchmarks vs. retained and churned averages.
-   - The recommended action with its expected value.
-
-| | |
-|---|---|
-| ![Diagnostic](docs/screenshots/02-diagnostic-root-cause.png) | ![What-if](docs/screenshots/03-what-if-planner.png) |
-| ![Drill-through](docs/screenshots/04-customer-drillthrough.png) | ![Cross-filter](docs/screenshots/05-cross-filtering.png) |
+### Limitations
+- **Snapshot data.** There are no transaction histories or join dates, so retention is analysed over tenure rather than join-year cohorts.
+- **Tenure is recorded in whole years**, so the survival curves step annually.
+- **Revenue and LTV are illustrative.** They use standard retail-banking assumptions (documented in `model.json → assumptions`), because the dataset has no financial fields.
 
 ---
 
 ## Quick start
 
-### Option A: Docker (one command)
+### Docker (one command)
 
 ```bash
 docker compose -f docker/docker-compose.yml up --build
 ```
 
-The `analytics` container downloads the Kaggle dataset and runs the engine. When it finishes, the `web` container starts. Open **http://localhost:3000**.
+The `analytics` container downloads the dataset and runs the engine. The `web` container then serves the dashboard at **http://localhost:3000**.
 
-### Option B: Local (Node 20+ and Python 3.9+)
+### Local (Node 20+ and Python 3.9+)
 
 ```bash
-# 1. Data + analytics
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r scripts/requirements.txt
 python scripts/fetch_kaggle_data.py        # -> data/raw/Customer-Churn-Records.csv
 python scripts/analytical_engine.py        # -> app/data/{customers,model}.json
 
-# 2. Dashboard
-cd app
-npm install
-npm run dev                                # http://localhost:3000
+cd app && npm install && npm run dev       # http://localhost:3000
 ```
 
-**If Kaggle rejects the anonymous download**, create an API token (kaggle.com → Settings → API) and export `KAGGLE_USERNAME` and `KAGGLE_KEY`, or place the CSV at `data/raw/Customer-Churn-Records.csv` yourself.
+**If Kaggle rejects the anonymous download**, create an API token (kaggle.com → Settings → API) and export `KAGGLE_USERNAME` and `KAGGLE_KEY`.
 
-If you re-run the engine while the app is running, click the **Refresh** icon in the action bar. The dashboard reads the JSON at request time, so it doesn't need a rebuild.
-
----
-
-## Architecture
+## Project structure
 
 ```
-Kaggle API ──► scripts/fetch_kaggle_data.py ──► data/raw/Customer-Churn-Records.csv
-                                                        │
-┌─────────────────── scripts/analytical_engine.py ──────▼───────────┐
-│ 0 quality checks   1 features   2 leakage audit                   │
-│ 3 χ² / Welch t   4 Kaplan-Meier + log-rank                        │
-│ 5 LR vs GBM (OOF)   6 LTV · risk · next-best-action               │
-│        ├─► app/data/customers.json  (row-level fact table)        │
-│        ├─► app/data/model.json      (tests, survival, models)     │
-│        └─► data/processed/customers_enriched.csv                  │
-└───────────────────────────────────────────────────────────────────┘
-                              │  GET /api/data/:dataset  (read at request time)
-┌──────────────────────── app/ (Next.js 16 · React 19) ─────────────┐
-│ context/ReportContext   filter context: report/page filters,      │
-│                         cross-filter, focus, zoom, drill-through  │
-│ lib/measures.ts         "DAX" measures evaluated per filter ctx   │
-│ components/shell/*      Power BI service chrome                   │
-│ components/visuals/*    Recharts visuals in PBI visual containers │
-│ components/pages/*      the four report pages                     │
-└───────────────────────────────────────────────────────────────────┘
-```
-
-**Design choice:** the heavy statistics run once in Python and are shipped as a semantic model. Measures such as attrition %, KM retention, key-influencer lift, Pareto and the what-if simulation are computed in the browser against the current filter context, the same way Power BI evaluates DAX. That's why every slicer, filter-pane card and cross-filter updates the visuals instantly.
-
-### Repository layout
-
-```
-├── app/                      Next.js dashboard (TypeScript, Tailwind CSS v4, Recharts, Lucide)
-│   ├── data/                 engine output served by /api/data/* (git-ignored)
-│   └── src/{app,components,context,lib}
 ├── scripts/
-│   ├── fetch_kaggle_data.py
-│   ├── analytical_engine.py
+│   ├── fetch_kaggle_data.py      download + validate the Kaggle dataset
+│   ├── analytical_engine.py      quality · leakage · tests · survival · models · LTV
 │   └── requirements.txt
-├── docker/
-│   ├── Dockerfile.analytics  python:3.11-slim engine image
-│   ├── Dockerfile.web        multi-stage Next.js standalone image
-│   └── docker-compose.yml
-├── data/                     raw + processed CSVs (git-ignored)
-└── docs/screenshots/
+├── app/                          Next.js dashboard (TypeScript, Tailwind CSS, Recharts)
+│   └── src/
+│       ├── lib/measures.ts       filter-aware measures (KM, lift, Pareto, what-if)
+│       ├── context/              filter state, cross-filtering, drill-through
+│       └── components/           charts and report pages
+├── docker/                       analytics + web images, docker-compose.yml
+└── docs/charts/                  README figures
 ```
-
-## Data dictionary
-
-| Kaggle column | Engine column | Description |
-|---|---|---|
-| `CustomerId` | `Customer_ID` | Anonymous customer identifier |
-| `CreditScore`, `Geography`, `Gender`, `Age` | same | Demographics and credit quality (France / Germany / Spain) |
-| `Tenure` | `Tenure`, `Tenure_Months` | Years as a customer; the survival duration |
-| `Balance`, `NumOfProducts`, `HasCrCard`, `IsActiveMember`, `EstimatedSalary` | same | Account and product holdings |
-| `Card Type`, `Point Earned` | `Card_Type`, `Points_Earned` | Card tier and loyalty points |
-| `Satisfaction Score` | `Satisfaction_Score` | 1–5 rating of complaint resolution |
-| `Complain` | `Complain` | Complaint logged. **Target leakage; excluded from the model** |
-| `Exited` | `Churn_Status` | Target: 1 = left the bank |
-| *(engine)* | `Churn_Probability`, `Annual_Revenue`, `LTV`, `At_Risk_Revenue`, `Risk_Tier`, `Value_Tier`, `Recommended_Action` | Scoring outputs |
-
-## Limitations
-
-- **Snapshot data.** There are no transaction histories or join dates, so behavioural decay and true join-year cohorts can't be observed. The retention heatmap uses Kaplan-Meier over tenure by segment instead.
-- **Tenure is whole years**, so the survival curves step annually.
-- **Revenue and LTV use illustrative banking assumptions**, because the dataset has no financials.
-
----
-
-## Using the simulator
-
-- **Slicers** on the canvas sync with the *Filters on all pages* cards in the filter pane.
-- **Page-level filters** (for example *Card Type* on page 2) apply only to that page.
-- **Click a column** in *Attrition by Geography* or *Product Holding* to cross-filter the page. Click it again to clear.
-- **Hover a visual** for its header: filter peek, **focus mode**, and a **⋯** menu with *Show as a table* and *Export data*.
-- **Click a row** in the at-risk table to drill through to the customer. The **←** button returns you.
-- **Export → Analyze in Excel** downloads the currently filtered customer table as CSV.
-
-> *Disclaimer:* this is an independent portfolio project that recreates the look of the Power BI Service UI for demonstration purposes. It is not affiliated with or endorsed by Microsoft. The dataset belongs to its Kaggle publisher and is downloaded at runtime, not redistributed.

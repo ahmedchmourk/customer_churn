@@ -2,7 +2,7 @@
   "name": "bank-churn-ltv-dashboard",
   "version": "1.0.0",
   "private": true,
-  "description": "Retail Bank Customer Churn & LTV Diagnostic Analytics Dashboard - Power BI Web Simulator",
+  "description": "Retail Bank Customer Churn & LTV Diagnostic Analytics Dashboard",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

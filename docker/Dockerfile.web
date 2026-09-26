@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# Next.js Power BI simulator - multi-stage production image (standalone output)
+# Next.js analytics dashboard - multi-stage production image (standalone output)
 # ---------------------------------------------------------------------------
 FROM node:22-alpine AS deps
 WORKDIR /app

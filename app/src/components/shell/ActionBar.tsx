@@ -73,7 +73,7 @@ export function ActionBar() {
       <ActionButton icon={MessageSquare} label="Chat in Teams" onClick={() => notify("Opening Microsoft Teams…")} hideLabelBelow="xl" />
       <ActionButton icon={Lightbulb} label="Get insights" onClick={() => notify("Insights: customers holding 3+ products churn at 86% vs 20% portfolio-wide")} hideLabelBelow="xl" />
       <ActionButton icon={Mail} label="Subscribe to report" onClick={() => notify("Subscribed - weekly email every Monday 08:00")} />
-      <ActionButton icon={Pencil} label="Edit" onClick={() => notify("Edit mode requires a Pro licence (simulator)")} />
+      <ActionButton icon={Pencil} label="Edit" onClick={() => notify("Edit mode is disabled for this report")} />
       <ActionButton icon={Star} label="Favorite" onClick={() => notify("Added to Favorites")} hideLabelBelow="xl" />
 
       <div className="ml-auto flex items-center gap-0.5">
