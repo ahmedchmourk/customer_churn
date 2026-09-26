@@ -83,13 +83,13 @@ export function attritionMatrix(rows: Customer[], rowField: FieldKey, seriesFiel
 }
 
 // ---------------------------------------------------------------------------
-// Kaplan-Meier (product-limit) estimator - used for the filter-aware cohort grid
+// Kaplan-Meier (product-limit) estimator - used for the filter-aware retention grid
 // ---------------------------------------------------------------------------
-export function kaplanMeierAt(rows: Customer[], checkpoints: number[]): (number | null)[] {
+export function kaplanMeierAt(rows: Customer[], checkpoints: number[], minAtRisk = 15): (number | null)[] {
   if (rows.length === 0) return checkpoints.map(() => null);
   const maxT = rows.reduce((m, c) => Math.max(m, c.tenureMonths), 0);
-  const events = new Float64Array(maxT + 2);
-  const exits = new Float64Array(maxT + 2);
+  const events = new Float64Array(maxT + 1);
+  const exits = new Float64Array(maxT + 1);
   for (const c of rows) {
     exits[c.tenureMonths] += 1;
     if (c.churned) events[c.tenureMonths] += 1;
@@ -99,29 +99,32 @@ export function kaplanMeierAt(rows: Customer[], checkpoints: number[]): (number 
   let s = 1;
   let t = 0;
   for (const cp of checkpoints) {
+    let atRiskAtCp = 0;
     for (; t <= cp && t <= maxT; t++) {
+      if (t === cp) atRiskAtCp = atRisk;
       if (atRisk > 0 && events[t] > 0) s *= 1 - events[t] / atRisk;
       atRisk -= exits[t];
     }
-    // Only report a survival value while enough customers remain observed.
-    out.push(cp <= maxT && atRisk >= 15 ? s : null);
+    // Only report a survival value while enough customers are still observed.
+    out.push(cp <= maxT && atRiskAtCp >= minAtRisk ? s : null);
   }
   return out;
 }
 
-export interface CohortRow {
-  cohort: number;
+export interface RetentionRow {
+  segment: string;
   customers: number;
   cells: (number | null)[];
 }
 
-export function cohortRetention(rows: Customer[], years = 8): CohortRow[] {
-  const cohorts = Array.from(new Set(rows.map((c) => c.cohortYear))).sort((a, b) => a - b);
+/** KM retention after 1..N tenure years for each value of a segment field. */
+export function segmentRetention(rows: Customer[], field: FieldKey, years = 10): RetentionRow[] {
+  const def = FIELDS[field];
   const checkpoints = Array.from({ length: years }, (_, i) => (i + 1) * 12);
-  return cohorts
-    .map((cohort) => {
-      const subset = rows.filter((c) => c.cohortYear === cohort);
-      return { cohort, customers: subset.length, cells: kaplanMeierAt(subset, checkpoints) };
+  return def.values
+    .map((segment) => {
+      const subset = rows.filter((c) => def.get(c) === segment);
+      return { segment, customers: subset.length, cells: kaplanMeierAt(subset, checkpoints) };
     })
     .filter((r) => r.customers >= 30 && r.cells.some((v) => v !== null));
 }
@@ -154,10 +157,9 @@ const numericBuckets = (label: string, get: (c: Customer) => number, edges: numb
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 
-const DECAY_BUCKETS = numericBuckets("Transaction Decay Score", (c) => c.txnDecay, [0, 0.2, 0.4, 0.6, 0.8, 1.01], (v) => Math.min(v, 1).toFixed(1));
-const BAL_BUCKETS = numericBuckets("90-Day Balance Change", (c) => c.balanceChange, [-1.01, -0.4, -0.2, -0.05, 0.05, 0.61], (v) => pct(Math.max(-1, Math.min(v, 0.6))));
-const TXN_BUCKETS = numericBuckets("Monthly Transactions", (c) => c.txnFreq, [0, 5, 10, 20, 30, 999], (v) => (v >= 999 ? "∞" : String(v)));
-const COMPLAINT_BUCKETS = numericBuckets("Complaints (12M)", (c) => c.complaints, [0, 1, 2, 3, 99], (v) => (v >= 99 ? "+" : String(v)));
+const SATISFACTION_BUCKETS = bucketsFromField("satisfaction");
+const POINTS_BUCKETS = numericBuckets("Loyalty Points", (c) => c.points, [0, 300, 500, 700, 900, 1001], (v) => String(Math.min(v, 1000)));
+const SALARY_BUCKETS = numericBuckets("Estimated Salary", (c) => c.salary, [0, 50_000, 100_000, 150_000, 1e9], (v) => (v >= 1e9 ? "∞" : `$${v / 1000}K`));
 const TENURE_BUCKETS = numericBuckets("Tenure (Years)", (c) => c.tenure, [0, 2, 4, 6, 8, 11], (v) => String(v));
 const CREDIT_BUCKETS = numericBuckets("Credit Score", (c) => c.creditScore, [350, 500, 580, 670, 740, 851], (v) => String(Math.min(v, 850)));
 const BALANCE_BUCKETS = numericBuckets("Balance", (c) => c.balance, [0, 1, 50_000, 100_000, 150_000, 1e9], (v) => (v >= 1e9 ? "∞" : v === 1 ? "$0+" : `$${v / 1000}K`));
@@ -175,10 +177,13 @@ export const INFLUENCER_CONDITIONS: InfluencerCondition[] = [
   { id: "inactive", field: "IsActiveMember", phrase: "is Inactive", test: (c) => c.isActive === 0, breakdown: bucketsFromField("memberStatus") },
   { id: "prod-1", field: "NumOfProducts", phrase: "is 1", test: (c) => c.products === 1, breakdown: bucketsFromField("products") },
   { id: "prod-3", field: "NumOfProducts", phrase: "is 3 or more", test: (c) => c.products >= 3, breakdown: bucketsFromField("products") },
-  { id: "decay", field: "Transaction Decay Score", phrase: "is more than 0.50", test: (c) => c.txnDecay > 0.5, breakdown: DECAY_BUCKETS },
-  { id: "baldrop", field: "90-Day Balance Change", phrase: "is less than -20%", test: (c) => c.balanceChange < -0.2, breakdown: BAL_BUCKETS },
-  { id: "lowtxn", field: "Monthly Transactions", phrase: "is less than 10", test: (c) => c.txnFreq < 10, breakdown: TXN_BUCKETS },
-  { id: "complaint", field: "Complaints (12M)", phrase: "is 1 or more", test: (c) => c.complaints >= 1, breakdown: COMPLAINT_BUCKETS },
+  { id: "midbal", field: "Balance", phrase: "is $100K–$150K", test: (c) => c.balance >= 100_000 && c.balance < 150_000, breakdown: BALANCE_BUCKETS },
+  { id: "lowsat", field: "Satisfaction Score", phrase: "is 2 or less", test: (c) => c.satisfaction <= 2, breakdown: SATISFACTION_BUCKETS },
+  ...(["Silver", "Gold", "Platinum", "Diamond"] as const).map((t) => ({
+    id: `card-${t}`, field: "Card Type", phrase: `is ${t}`, test: (c: Customer) => c.cardType === t, breakdown: bucketsFromField("cardType"),
+  })),
+  { id: "lowpoints", field: "Loyalty Points", phrase: "is less than 400", test: (c) => c.points < 400, breakdown: POINTS_BUCKETS },
+  { id: "lowsalary", field: "Estimated Salary", phrase: "is less than $50K", test: (c) => c.salary < 50_000, breakdown: SALARY_BUCKETS },
   { id: "tenure", field: "Tenure", phrase: "is 2 years or less", test: (c) => c.tenure <= 2, breakdown: TENURE_BUCKETS },
   { id: "credit", field: "Credit Score", phrase: "is less than 580", test: (c) => c.creditScore < 580, breakdown: CREDIT_BUCKETS },
   { id: "zerobal", field: "Balance", phrase: "is 0", test: (c) => c.balance === 0, breakdown: BALANCE_BUCKETS },
@@ -317,7 +322,7 @@ export interface LtvAssumptions {
   max_retention: number;
 }
 
-export function readAssumptions(a: Record<string, number | string>): LtvAssumptions {
+export function readAssumptions(a: Record<string, unknown>): LtvAssumptions {
   return {
     contribution_margin: Number(a.contribution_margin ?? 0.62),
     discount_rate: Number(a.discount_rate ?? 0.1),
@@ -403,7 +408,7 @@ export function simulateWhatIf(rows: Customer[], params: WhatIfParams, assumptio
 
 /** Which influencer conditions apply to a single account - used on the drill-through page. */
 const ACCOUNT_DRIVER_IDS = new Set([
-  "inactive", "prod-1", "prod-3", "decay", "baldrop", "lowtxn", "complaint", "tenure", "credit", "geo-Germany", "age-50-59", "age-60+",
+  "inactive", "prod-1", "prod-3", "midbal", "lowsat", "tenure", "credit", "geo-Germany", "gender-Female", "age-40-49", "age-50-59", "age-60+",
 ]);
 
 export function accountRiskDrivers(c: Customer): string[] {

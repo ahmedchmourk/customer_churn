@@ -15,7 +15,9 @@ export type FieldKey =
   | "memberStatus"
   | "products"
   | "valueTier"
-  | "riskTier";
+  | "riskTier"
+  | "cardType"
+  | "satisfaction";
 
 export interface FieldDef {
   key: FieldKey;
@@ -75,6 +77,20 @@ export const FIELDS: Record<FieldKey, FieldDef> = {
     column: "Scores[Risk_Tier]",
     values: ["Critical", "High", "Medium", "Low", "Churned"],
     get: (c) => c.riskTier,
+  },
+  cardType: {
+    key: "cardType",
+    label: "Card Type",
+    column: "Customers[Card_Type]",
+    values: ["Silver", "Gold", "Platinum", "Diamond"],
+    get: (c) => c.cardType,
+  },
+  satisfaction: {
+    key: "satisfaction",
+    label: "Satisfaction Score",
+    column: "Customers[Satisfaction_Score]",
+    values: ["1", "2", "3", "4", "5"],
+    get: (c) => String(c.satisfaction),
   },
 };
 

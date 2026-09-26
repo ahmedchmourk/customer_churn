@@ -71,7 +71,7 @@ export function ActionBar() {
       <div className="mx-1 h-5 w-px bg-pbi-line" />
       <ActionButton icon={Share2} label="Share" onClick={copyLink} />
       <ActionButton icon={MessageSquare} label="Chat in Teams" onClick={() => notify("Opening Microsoft Teams…")} hideLabelBelow="xl" />
-      <ActionButton icon={Lightbulb} label="Get insights" onClick={() => notify("Insights: Inactive members churn at ~1.9x the rate of active members")} hideLabelBelow="xl" />
+      <ActionButton icon={Lightbulb} label="Get insights" onClick={() => notify("Insights: customers holding 3+ products churn at 86% vs 20% portfolio-wide")} hideLabelBelow="xl" />
       <ActionButton icon={Mail} label="Subscribe to report" onClick={() => notify("Subscribed - weekly email every Monday 08:00")} />
       <ActionButton icon={Pencil} label="Edit" onClick={() => notify("Edit mode requires a Pro licence (simulator)")} />
       <ActionButton icon={Star} label="Favorite" onClick={() => notify("Added to Favorites")} hideLabelBelow="xl" />

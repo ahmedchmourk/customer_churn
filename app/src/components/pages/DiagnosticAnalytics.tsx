@@ -2,7 +2,7 @@
 
 import { useReport } from "@/context/ReportContext";
 import { fmtInt } from "@/lib/format";
-import { BalanceDecayScatter, HypothesisTable, KeyInfluencers, ParetoChart, SurvivalCurves } from "../visuals/diagnosticCharts";
+import { AgeBalanceScatter, HypothesisTable, KeyInfluencers, ParetoChart, SurvivalCurves } from "../visuals/diagnosticCharts";
 import { DropdownSlicer, PageHeader, TileSlicer } from "../visuals/primitives";
 
 export function DiagnosticAnalytics() {
@@ -16,7 +16,7 @@ export function DiagnosticAnalytics() {
         subtitle={`Why customers leave · ${fmtInt(pageRows.length)} customers in context`}
         right={
           <div className="text-right text-[11px] text-white/70">
-            <div>Propensity model ROC-AUC <b className="text-[13px] text-white">{pm.roc_auc.toFixed(3)}</b></div>
+            <div>{pm.algorithm.split(" (")[0]} · ROC-AUC <b className="text-[13px] text-white">{pm.roc_auc.toFixed(3)}</b></div>
             <div>PR-AUC <b className="text-[13px] text-white">{pm.pr_auc.toFixed(3)}</b> · base rate {Math.round(pm.base_rate * 1000) / 10}%</div>
           </div>
         }
@@ -30,7 +30,7 @@ export function DiagnosticAnalytics() {
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
         <KeyInfluencers className="h-[420px] lg:col-span-7" />
         <SurvivalCurves className="h-[420px] lg:col-span-5" />
-        <BalanceDecayScatter className="h-[360px] lg:col-span-6" />
+        <AgeBalanceScatter className="h-[360px] lg:col-span-6" />
         <ParetoChart className="h-[360px] lg:col-span-6" />
         <HypothesisTable className="h-[430px] lg:col-span-12" />
       </div>

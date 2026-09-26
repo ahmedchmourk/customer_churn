@@ -44,11 +44,11 @@ export function CustomerDrillthrough() {
     const retained = all.filter((x) => x.churned === 0);
     const churned = all.filter((x) => x.churned === 1);
     const metrics: { label: string; get: (x: Customer) => number; fmt: (v: number) => string }[] = [
-      { label: "Monthly transactions", get: (x) => x.txnFreq, fmt: (v) => v.toFixed(1) },
-      { label: "Transaction decay score", get: (x) => x.txnDecay, fmt: (v) => v.toFixed(2) },
-      { label: "90-day balance change", get: (x) => x.balanceChange, fmt: (v) => fmtPct(v, 0) },
-      { label: "Complaints (12M)", get: (x) => x.complaints, fmt: (v) => v.toFixed(1) },
+      { label: "Age", get: (x) => x.age, fmt: (v) => v.toFixed(1) },
+      { label: "Account balance", get: (x) => x.balance, fmt: (v) => fmtMoney(v) },
+      { label: "Active member", get: (x) => x.isActive, fmt: (v) => fmtPct(v, 0) },
       { label: "Credit score", get: (x) => x.creditScore, fmt: (v) => v.toFixed(0) },
+      { label: "Satisfaction score", get: (x) => x.satisfaction, fmt: (v) => v.toFixed(1) },
     ];
     return metrics.map((m) => ({ ...m, retained: avg(retained, m.get), churned: avg(churned, m.get) }));
   }, [data]);
@@ -100,13 +100,16 @@ export function CustomerDrillthrough() {
               ["Gender", c.gender],
               ["Age", `${c.age} (${c.ageTier})`],
               ["Tenure", `${c.tenure} yrs (${c.tenureMonths} mo)`],
-              ["Join cohort", String(c.cohortYear)],
+              ["Card type", c.cardType],
               ["Products held", String(c.products)],
               ["Credit card", c.hasCrCard ? "Yes" : "No"],
               ["Member status", c.isActive ? "Active" : "Inactive"],
               ["Credit score", String(c.creditScore)],
               ["Balance", fmtMoneyFull(c.balance)],
               ["Est. salary", fmtMoneyFull(c.salary)],
+              ["Satisfaction", `${c.satisfaction} / 5`],
+              ["Loyalty points", fmtInt(c.points)],
+              ["Complaint logged", c.complain ? "Yes" : "No"],
               ["Value tier", <TierDot key="t" tier={c.valueTier} />],
             ].map(([k, v]) => (
               <div key={String(k)}>
@@ -120,7 +123,7 @@ export function CustomerDrillthrough() {
         <Panel title="Churn probability" className="flex flex-col items-center lg:col-span-3">
           <Gauge value={c.churnProb} color={risk.fg} />
           <div className="mt-1 text-center text-[11px] text-pbi-ink2">
-            Out-of-fold logistic-regression score · portfolio base rate {fmtPct(data!.model.propensity_model.base_rate)}
+            Out-of-fold {data!.model.propensity_model.algorithm.split(" (")[0].toLowerCase()} score · portfolio base rate {fmtPct(data!.model.propensity_model.base_rate)}
           </div>
           <div className="mt-3 w-full">
             <div className="mb-1 text-[12px] font-semibold">Active risk drivers</div>

@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import { useReport, useVisualRows } from "@/context/ReportContext";
 import { fmtInt, fmtMoney, fmtPct } from "@/lib/format";
 import { kpis } from "@/lib/measures";
-import { AttritionByTenure, ChurnByGeoAge, CohortHeatmap, ProductHolding } from "../visuals/overviewCharts";
+import { AttritionByTenure, ChurnByGeoAge, RetentionHeatmap, ProductHolding } from "../visuals/overviewCharts";
 import { DropdownSlicer, KpiCard, PageHeader, TileSlicer } from "../visuals/primitives";
 
 /** Delta vs. the unfiltered portfolio, phrased the Power BI way. */
@@ -27,7 +27,7 @@ export function ExecutiveOverview() {
     <div className="relative mx-auto flex max-w-[1600px] flex-col gap-3 rounded-[2px] bg-pbi-page p-3 shadow-sm">
       <PageHeader
         title="Executive Attrition Overview"
-        subtitle={`Retail banking book · ${fmtInt(k.customers)} customers in context · snapshot 30 Jun 2026`}
+        subtitle={`${data!.model.meta.dataset} · ${fmtInt(k.customers)} customers in context`}
         right={
           <div className="text-right text-[11px] text-white/70">
             <div>
@@ -79,7 +79,7 @@ export function ExecutiveOverview() {
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
         <ChurnByGeoAge className="h-[330px] lg:col-span-7" />
         <ProductHolding className="h-[330px] lg:col-span-5" />
-        <CohortHeatmap className="h-[430px] lg:col-span-8" />
+        <RetentionHeatmap className="h-[430px] lg:col-span-8" />
         <AttritionByTenure className="h-[430px] lg:col-span-4" />
       </div>
     </div>

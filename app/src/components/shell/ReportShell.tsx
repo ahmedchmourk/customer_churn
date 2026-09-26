@@ -35,7 +35,7 @@ function LoadError({ message }: { message: string }) {
       <p className="text-pbi-ink2">
         Generate the semantic model first:
         <code className="mt-2 block rounded-sm bg-pbi-hover p-2 text-[12px] text-pbi-ink">
-          python scripts/generate_synthetic_bank_data.py && python scripts/analytical_engine.py
+          python scripts/fetch_kaggle_data.py && python scripts/analytical_engine.py
         </code>
       </p>
     </div>

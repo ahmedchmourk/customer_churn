@@ -17,16 +17,16 @@ export interface Customer {
   creditScore: number;
   tenure: number;
   tenureMonths: number;
-  cohortYear: number;
   balance: number;
   products: number;
   hasCrCard: 0 | 1;
   isActive: 0 | 1;
   salary: number;
-  txnFreq: number;
-  txnDecay: number;
-  balanceChange: number;
-  complaints: number;
+  /** Complaint logged - target leakage, excluded from the model (see leakage audit). */
+  complain: 0 | 1;
+  satisfaction: number;
+  cardType: "Silver" | "Gold" | "Platinum" | "Diamond";
+  points: number;
   churned: 0 | 1;
   churnProb: number;
   riskTier: RiskTier;
@@ -48,6 +48,7 @@ export interface HypothesisTest {
   p_value: number;
   p_value_adj: number;
   significant: boolean;
+  leakage: boolean;
   effect_size: number;
   effect_metric: "Cramer's V" | "Cohen's d";
   churn_rate_by_level?: Record<string, number>;
@@ -79,15 +80,25 @@ export interface SurvivalSegment {
   logrank_statistic?: number;
 }
 
+export interface LeakageAuditRow {
+  feature: string;
+  single_feature_auc: number;
+  leakage: boolean;
+}
+
 export interface AnalyticsModel {
   meta: {
     generated_at: string;
     source: string;
+    dataset: string;
+    dataset_url: string;
     rows: number;
     attrition_rate: number;
     engine_version: string;
   };
-  assumptions: Record<string, number | string>;
+  data_quality: Record<string, number | boolean | string[]>;
+  leakage_audit: LeakageAuditRow[];
+  assumptions: Record<string, number | string | Record<string, number>>;
   hypothesis_tests: HypothesisTest[];
   survival: Record<string, SurvivalSegment>;
   propensity_model: {
@@ -96,6 +107,9 @@ export interface AnalyticsModel {
     roc_auc: number;
     pr_auc: number;
     base_rate: number;
+    comparison: { model: string; roc_auc: number; pr_auc: number; brier: number }[];
+    excluded_features: string[];
+    permutation_importance: { feature: string; importance: number }[];
     coefficients: { feature: string; coefficient: number; odds_ratio: number }[];
   };
 }

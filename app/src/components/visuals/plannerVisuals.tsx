@@ -162,7 +162,7 @@ export function TierDot({ tier }: { tier: ValueTier }) {
 // ---------------------------------------------------------------------------
 // Drill-through table of high-LTV at-risk accounts
 // ---------------------------------------------------------------------------
-type SortKey = "priority" | "ltv" | "churnProb" | "atRiskRevenue" | "balance" | "balanceChange";
+type SortKey = "priority" | "ltv" | "churnProb" | "atRiskRevenue" | "balance";
 
 const COLUMNS: { key: SortKey | null; label: string; align?: "right" }[] = [
   { key: null, label: "Customer" },
@@ -172,7 +172,7 @@ const COLUMNS: { key: SortKey | null; label: string; align?: "right" }[] = [
   { key: "churnProb", label: "Churn risk" },
   { key: "atRiskRevenue", label: "At-risk rev.", align: "right" },
   { key: "balance", label: "Balance", align: "right" },
-  { key: "balanceChange", label: "90d Δ bal.", align: "right" },
+  { key: null, label: "Member" },
   { key: null, label: "Recommended retention action" },
   { key: "priority", label: "Expected value saved", align: "right" },
 ];
@@ -215,7 +215,7 @@ export function AtRiskAccountsTable({ className }: { className?: string }) {
       tableRows={() =>
         accounts.map((c) => ({
           Customer: c.id, Geography: c.geography, Age: c.age, "Value Tier": c.valueTier, LTV: c.ltv, "Churn Probability": c.churnProb, "Risk Tier": c.riskTier,
-          "At-Risk Revenue": c.atRiskRevenue, Balance: c.balance, "90d Balance Change": c.balanceChange, Action: c.action, "Expected Value Saved": Math.round(expectedSave(c, assumptions)),
+          "At-Risk Revenue": c.atRiskRevenue, Balance: c.balance, "Member Status": c.isActive ? "Active" : "Inactive", Action: c.action, "Expected Value Saved": Math.round(expectedSave(c, assumptions)),
         }))
       }
     >
@@ -268,7 +268,7 @@ export function AtRiskAccountsTable({ className }: { className?: string }) {
                   <td className="px-2 py-1.5"><RiskPill tier={c.riskTier} prob={c.churnProb} /></td>
                   <td className="px-2 py-1.5 text-right tabular-nums">{fmtMoney(c.atRiskRevenue)}</td>
                   <td className="px-2 py-1.5 text-right tabular-nums">{fmtMoney(c.balance)}</td>
-                  <td className={`px-2 py-1.5 text-right tabular-nums ${c.balanceChange < -0.2 ? "font-semibold text-[#A4262C]" : ""}`}>{fmtPct(c.balanceChange, 0)}</td>
+                  <td className={`px-2 py-1.5 ${c.isActive ? "text-pbi-ink2" : "font-semibold text-[#A4262C]"}`}>{c.isActive ? "Active" : "Inactive"}</td>
                   <td className="whitespace-nowrap px-2 py-1.5">{c.action}</td>
                   <td className="px-2 py-1.5 text-right tabular-nums">
                     <span className="inline-flex items-center gap-1">

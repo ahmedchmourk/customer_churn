@@ -3,3 +3,9 @@ __pycache__/
 .DS_Store
 node_modules/
 app/.next/
+
+# Kaggle dataset has no explicit redistribution licence: never commit raw rows
+# or per-customer derivatives. Regenerate with scripts/fetch_kaggle_data.py.
+data/raw/
+data/processed/
+app/data/*.json

@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ChevronDown, X } from "lucide-react";
+import { Check, ChevronDown, TriangleAlert, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   Area,
@@ -54,8 +54,8 @@ export function KeyInfluencers({ className }: { className?: string }) {
       id={id}
       className={className}
       title="Key Influencers"
-      subtitle="What influences Churn_Status to be Yes · lift vs. all other customers, two-proportion z-test (p < 0.05)"
-      fields={["Customers[Churn_Status]", "Customers[IsActiveMember]", "Customers[NumOfProducts]", "Behaviour[Transaction_Decay_Score]", "Behaviour[Balance_Change_90d_Pct]", "Customers[Age_Tier]", "Customers[Geography]"]}
+      subtitle="What influences Exited to be Yes · lift vs. all other customers, two-proportion z-test (p < 0.05) · Complain excluded (target leakage)"
+      fields={["Customers[Exited]", "Customers[Age_Tier]", "Customers[NumOfProducts]", "Customers[IsActiveMember]", "Customers[Geography]", "Customers[Gender]", "Customers[Balance]"]}
       tableRows={() =>
         influencers.map((i) => ({
           Influencer: `${i.condition.field} ${i.condition.phrase}`,
@@ -70,7 +70,7 @@ export function KeyInfluencers({ className }: { className?: string }) {
       <div className="flex h-full flex-col">
         <div className="mb-2 flex flex-wrap items-center gap-2 px-1 text-[12px]">
           <span className="text-pbi-ink2">What influences</span>
-          <span className="flex items-center gap-1 rounded-[2px] border border-pbi-line px-2 py-0.5 font-semibold">Churn Status <ChevronDown size={11} /></span>
+          <span className="flex items-center gap-1 rounded-[2px] border border-pbi-line px-2 py-0.5 font-semibold">Exited <ChevronDown size={11} /></span>
           <span className="text-pbi-ink2">to be</span>
           <span className="flex items-center gap-1 rounded-[2px] border border-pbi-line px-2 py-0.5 font-semibold">Yes <ChevronDown size={11} /></span>
           <div className="ml-auto flex overflow-hidden rounded-[2px] border border-pbi-line">
@@ -178,7 +178,7 @@ export function KeyInfluencers({ className }: { className?: string }) {
             {segment && (
               <div className="flex flex-col gap-2 px-1 text-[12px]">
                 <div>
-                  When <b>Churn Status</b> is Yes, <b>{fmtPct(segment.rate)}</b> of customers in this segment churned — <b>{(segment.rate / (overall || 1)).toFixed(1)}x</b> the average of {fmtPct(overall)}.
+                  When <b>Exited</b> is Yes, <b>{fmtPct(segment.rate)}</b> of customers in this segment churned — <b>{(segment.rate / (overall || 1)).toFixed(1)}x</b> the average of {fmtPct(overall)}.
                 </div>
                 <div className="rounded-[3px] border border-pbi-line p-2">
                   <div className="mb-1 text-[11px] font-semibold text-pbi-ink2">Segment definition</div>
@@ -236,7 +236,7 @@ export function SurvivalCurves({ className }: { className?: string }) {
           lifelines KaplanMeierFitter, 95% CI{seg.logrank_p !== null ? <> · log-rank p <b>{fmtP(seg.logrank_p)}</b></> : null} · engine output (not filter-aware)
         </>
       }
-      fields={["Customers[Tenure_Months]", "Customers[Churn_Status]", `Segment: ${segment}`]}
+      fields={["Customers[Tenure_Months]", "Customers[Exited]", `Segment: ${segment}`]}
       tableRows={() =>
         seg.curves.map((c) => ({
           Segment: c.label,
@@ -296,26 +296,28 @@ export function SurvivalCurves({ className }: { className?: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Pre-churn balance decay vs. transaction frequency
+// Age vs. balance - the two strongest continuous churn drivers in the data
 // ---------------------------------------------------------------------------
-/** Deterministic jitter so integer transaction counts don't overplot. */
+/** Deterministic jitter so integer ages don't overplot. */
 function jitter(id: string): number {
   let h = 0;
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
   return ((Math.abs(h) % 1000) / 1000 - 0.5) * 0.8;
 }
 
-export function BalanceDecayScatter({ className }: { className?: string }) {
-  const id = "decay-scatter";
+const ZONE = { ageMin: 45, ageMax: 65, balanceMin: 50_000 };
+
+export function AgeBalanceScatter({ className }: { className?: string }) {
+  const id = "age-balance-scatter";
   const rows = useVisualRows(id);
-  const { retained, churned, dangerShare } = useMemo(() => {
-    const withBalance = rows.filter((c) => c.balance > 0);
-    const sample = strideSample(withBalance, 1400).map((c) => ({ x: c.txnFreq + jitter(c.id), y: c.balanceChange, c }));
-    const inDanger = withBalance.filter((c) => c.txnFreq < 10 && c.balanceChange < -0.2);
+  const { retained, churned, zoneRate, zoneN } = useMemo(() => {
+    const sample = strideSample(rows, 1600).map((c) => ({ x: c.age + jitter(c.id), y: c.balance, c }));
+    const inZone = rows.filter((c) => c.age >= ZONE.ageMin && c.age < ZONE.ageMax && c.balance >= ZONE.balanceMin);
     return {
       retained: sample.filter((p) => p.c.churned === 0),
       churned: sample.filter((p) => p.c.churned === 1),
-      dangerShare: inDanger.length ? inDanger.filter((c) => c.churned).length / inDanger.length : 0,
+      zoneRate: inZone.length ? inZone.filter((c) => c.churned).length / inZone.length : 0,
+      zoneN: inZone.length,
     };
   }, [rows]);
 
@@ -323,10 +325,10 @@ export function BalanceDecayScatter({ className }: { className?: string }) {
     <VisualContainer
       id={id}
       className={className}
-      title="Pre-Churn Balance Decay vs. Transaction Frequency"
-      subtitle={<>Customers with a balance · shaded zone (&lt;10 txns/month, balance down &gt;20%) churns at <b>{fmtPct(dangerShare, 0)}</b></>}
-      fields={["Behaviour[Monthly_Txn_Count]", "Behaviour[Balance_Change_90d_Pct]", "Customers[Churn_Status]"]}
-      tableRows={() => [...retained, ...churned].map((p) => ({ Customer: p.c.id, "Monthly Txns": p.c.txnFreq, "90d Balance Change": p.c.balanceChange, Churned: p.c.churned }))}
+      title="Churn Concentration · Age vs. Account Balance"
+      subtitle={<>Shaded zone (age {ZONE.ageMin}–{ZONE.ageMax - 1}, balance ≥ $50K) churns at <b>{fmtPct(zoneRate, 0)}</b> across {fmtInt(zoneN)} customers · zero-balance accounts sit on the axis</>}
+      fields={["Customers[Age]", "Customers[Balance]", "Customers[Exited]"]}
+      tableRows={() => [...retained, ...churned].map((p) => ({ Customer: p.c.id, Age: p.c.age, Balance: p.c.balance, Churned: p.c.churned }))}
     >
       <div className="flex h-full flex-col">
         <div className="px-1 pb-1">
@@ -334,11 +336,11 @@ export function BalanceDecayScatter({ className }: { className?: string }) {
         </div>
         <div className="min-h-0 flex-1">
           <ResponsiveContainer width="100%" height="100%">
-            <ScatterChart margin={{ top: 8, right: 12, left: -12, bottom: 0 }}>
+            <ScatterChart margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
               <CartesianGrid stroke={PBI.grid} />
-              <ReferenceArea x1={0} x2={10} y1={-1} y2={-0.2} fill="#D64550" fillOpacity={0.07} stroke="#D64550" strokeOpacity={0.4} strokeDasharray="4 3" />
-              <XAxis type="number" dataKey="x" name="Monthly transactions" domain={[0, "dataMax"]} tick={AXIS_TICK} tickLine={false} axisLine={{ stroke: PBI.grid }} tickFormatter={(v: number) => String(Math.round(v))} label={{ value: "Monthly transactions", position: "insideBottomRight", offset: -2, fontSize: 10, fill: PBI.textSecondary }} />
-              <YAxis type="number" dataKey="y" name="90-day balance change" domain={[-1, 0.6]} tickFormatter={pctTick} tick={AXIS_TICK} axisLine={false} tickLine={false} width={44} />
+              <ReferenceArea x1={ZONE.ageMin} x2={ZONE.ageMax} y1={ZONE.balanceMin} y2={260_000} fill="#D64550" fillOpacity={0.07} stroke="#D64550" strokeOpacity={0.4} strokeDasharray="4 3" />
+              <XAxis type="number" dataKey="x" name="Age" domain={[18, 92]} ticks={[20, 30, 40, 50, 60, 70, 80, 90]} tick={AXIS_TICK} tickLine={false} axisLine={{ stroke: PBI.grid }} label={{ value: "Age", position: "insideBottomRight", offset: -2, fontSize: 10, fill: PBI.textSecondary }} />
+              <YAxis type="number" dataKey="y" name="Balance" domain={[0, 260_000]} tickFormatter={(v: number) => fmtMoney(v)} tick={AXIS_TICK} axisLine={false} tickLine={false} width={52} />
               <ZAxis range={[18, 18]} />
               <Tooltip
                 cursor={{ strokeDasharray: "3 3" }}
@@ -347,18 +349,19 @@ export function BalanceDecayScatter({ className }: { className?: string }) {
                   const c = (payload[0].payload as { c: Customer }).c;
                   return (
                     <PbiTooltip
-                      title={c.id}
+                      title={`Customer ${c.id}`}
                       rows={[
                         { label: "Status", value: c.churned ? "Churned" : "Retained" },
-                        { label: "Monthly transactions", value: String(c.txnFreq) },
-                        { label: "90-day balance change", value: fmtPct(c.balanceChange) },
+                        { label: "Age", value: String(c.age) },
                         { label: "Balance", value: fmtMoney(c.balance) },
+                        { label: "Products", value: String(c.products) },
+                        { label: "Churn probability", value: fmtPct(c.churnProb, 0) },
                       ]}
                     />
                   );
                 }}
               />
-              <Scatter name="Retained" data={retained} fill={SERIES_COLORS.Retained} fillOpacity={0.45} isAnimationActive={false} />
+              <Scatter name="Retained" data={retained} fill={SERIES_COLORS.Retained} fillOpacity={0.4} isAnimationActive={false} />
               <Scatter name="Churned" data={churned} fill={SERIES_COLORS.Churned} fillOpacity={0.7} isAnimationActive={false} />
             </ScatterChart>
           </ResponsiveContainer>
@@ -439,7 +442,7 @@ export function HypothesisTable({ className }: { className?: string }) {
       id="hypothesis-tests"
       className={className}
       title="Statistical Hypothesis Testing · Churn Drivers"
-      subtitle={`scipy.stats χ² independence & Welch t-tests · Bonferroni-adjusted α = 0.05 · propensity model ROC-AUC ${pm.roc_auc.toFixed(3)} (5-fold out-of-fold)`}
+      subtitle={`scipy.stats χ² independence & Welch t-tests · Bonferroni-adjusted α = 0.05 · models (5-fold OOF ROC-AUC): ${pm.comparison.map((m) => `${m.model} ${m.roc_auc.toFixed(3)}`).join(" · ")}`}
       fields={["Stats[Driver]", "Stats[Test]", "Stats[Effect_Size]", "Stats[P_Value_Adj]"]}
       tableRows={() =>
         tests.map((t) => ({ Driver: t.label, Test: t.test, Statistic: t.statistic, "Effect size": t.effect_size, Metric: t.effect_metric, "Adj. p-value": t.p_value_adj, Significant: t.significant ? "Yes" : "No" }))
@@ -456,7 +459,7 @@ export function HypothesisTable({ className }: { className?: string }) {
           </thead>
           <tbody>
             {tests.map((t) => (
-              <tr key={t.feature} className="border-b border-pbi-line hover:bg-pbi-hover">
+              <tr key={t.feature} className={`border-b border-pbi-line hover:bg-pbi-hover ${t.leakage ? "bg-[#FFFBEA]" : ""}`}>
                 <td className="px-2 py-1.5 font-semibold">{t.label}</td>
                 <td className="px-2 py-1.5 text-pbi-ink2">{t.test}{t.dof !== null ? ` (df=${t.dof})` : ""}</td>
                 <td className="px-2 py-1.5 tabular-nums">{t.statistic.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
@@ -478,7 +481,9 @@ export function HypothesisTable({ className }: { className?: string }) {
                 </td>
                 <td className="px-2 py-1.5 tabular-nums">{fmtP(t.p_value_adj)}</td>
                 <td className="px-2 py-1.5">
-                  {t.significant ? (
+                  {t.leakage ? (
+                    <span title="Predicts churn almost perfectly on its own - recorded at/after exit. Excluded from the model." className="inline-flex items-center gap-1 rounded-full bg-[#FFF4CE] px-2 py-0.5 text-[11px] font-semibold text-[#8A6100]"><TriangleAlert size={11} /> Target leakage</span>
+                  ) : t.significant ? (
                     <span className="inline-flex items-center gap-1 rounded-full bg-[#DFF6DD] px-2 py-0.5 text-[11px] font-semibold text-[#107C10]"><Check size={11} /> Significant</span>
                   ) : (
                     <span className="inline-flex items-center gap-1 rounded-full bg-pbi-hover px-2 py-0.5 text-[11px] font-semibold text-pbi-ink2"><X size={11} /> Not significant</span>

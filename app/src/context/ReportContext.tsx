@@ -29,7 +29,7 @@ export interface PageDef {
 
 export const PAGES: PageDef[] = [
   { id: "overview", title: "Executive Attrition Overview", pageFields: ["products"] },
-  { id: "diagnostic", title: "Diagnostic & Root-Cause Analytics", pageFields: ["valueTier"] },
+  { id: "diagnostic", title: "Diagnostic & Root-Cause Analytics", pageFields: ["valueTier", "cardType"] },
   { id: "planner", title: "Prescriptive Retention & What-If Planner", pageFields: ["riskTier"] },
   { id: "drillthrough", title: "Customer Drill-through", hidden: true, pageFields: [] },
 ];

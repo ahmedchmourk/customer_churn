@@ -2,34 +2,40 @@
 analytical_engine.py
 ====================
 
-Retail-bank churn & LTV analytics engine. Reads the raw customer extract, runs the
-statistical workload, and publishes the semantic model consumed by the dashboard.
+Retail-bank churn & LTV analytics engine for the real-world Kaggle
+"Bank Customer Churn" dataset (radheshyamkollipara/bank-customer-churn).
+Reads the raw extract, runs the statistical workload, and publishes the
+semantic model consumed by the dashboard.
 
 Pipeline
 --------
-1. Feature engineering    Age tiers, join cohorts, revenue attribution.
-2. Hypothesis testing     Chi-square (categorical drivers) and Welch t-tests
-                          (continuous drivers), with Cramer's V / Cohen's d effect
-                          sizes and Bonferroni-adjusted p-values.
-3. Survival analysis      Kaplan-Meier retention curves (lifelines) overall and by
-                          segment, plus multivariate log-rank tests.
-4. Propensity model       Regularised logistic regression; churn probabilities are
-                          produced *out-of-fold* (5-fold CV) so that every score is
-                          an honest, unseen-data prediction.
-5. LTV & risk scoring     Margin-based LTV with a retention-adjusted perpetuity,
-                          at-risk revenue, risk / value tiers and next-best-action
-                          retention recommendations.
+0. Ingestion & data quality  Schema mapping, null / duplicate / range checks.
+1. Feature engineering       Age tiers, tenure in months, revenue attribution.
+2. Leakage audit             Single-feature ROC-AUC per column; anything that
+                             predicts churn near-perfectly on its own (e.g.
+                             `Complain`) is flagged and excluded from modelling.
+3. Hypothesis testing        Chi-square (categorical drivers) and Welch t-tests
+                             (continuous drivers), with Cramer's V / Cohen's d
+                             effect sizes and Bonferroni-adjusted p-values.
+4. Survival analysis         Kaplan-Meier retention curves (lifelines) over tenure,
+                             overall and by segment, plus multivariate log-rank tests.
+5. Propensity model          Logistic regression vs. gradient boosting, compared on
+                             5-fold stratified out-of-fold predictions; the better
+                             model scores every customer on data it never saw.
+6. LTV & risk scoring        Margin-based LTV with a retention-adjusted perpetuity,
+                             at-risk revenue, risk / value tiers and next-best-action
+                             retention recommendations.
 
 Outputs
 -------
-- <data-dir>/customers.json          Row-level enriched fact table (dashboard)
-- <data-dir>/model.json              Tests, survival curves, model diagnostics
+- <data-dir>/customers.json               Row-level enriched fact table (dashboard)
+- <data-dir>/model.json                   Tests, survival curves, model diagnostics
 - data/processed/customers_enriched.csv   Analyst-friendly flat export
 
 Usage
 -----
+    python scripts/fetch_kaggle_data.py
     python scripts/analytical_engine.py
-    python scripts/analytical_engine.py --input data/raw/bank_customers.csv --data-dir app/data
 """
 
 from __future__ import annotations
@@ -47,24 +53,30 @@ from lifelines import KaplanMeierFitter
 from lifelines.statistics import multivariate_logrank_test
 from scipy import stats
 from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.inspection import permutation_importance
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import average_precision_score, roc_auc_score
+from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
 from sklearn.model_selection import StratifiedKFold, cross_val_predict
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_INPUT = REPO_ROOT / "data" / "raw" / "bank_customers.csv"
+DEFAULT_INPUT = REPO_ROOT / "data" / "raw" / "Customer-Churn-Records.csv"
 DEFAULT_DATA_DIR = REPO_ROOT / "app" / "data"
 DEFAULT_CSV_EXPORT = REPO_ROOT / "data" / "processed" / "customers_enriched.csv"
 
+DATASET_NAME = "Bank Customer Churn (Kaggle · radheshyamkollipara)"
+DATASET_URL = "https://www.kaggle.com/datasets/radheshyamkollipara/bank-customer-churn"
+
 ALPHA = 0.05
+LEAKAGE_AUC = 0.95  # a single raw column this predictive is almost certainly post-outcome
 
 # ---- Financial assumptions (documented in model.json -> assumptions) ----------
 NET_INTEREST_MARGIN = 0.021      # earned on deposit balances
 FEE_PER_PRODUCT = 85.0           # annual account / product fees
-CARD_REVENUE_ACTIVE = 210.0      # interchange + card fees, active card users
-CARD_REVENUE_INACTIVE = 90.0
+CARD_FEES = {"SILVER": 90.0, "GOLD": 150.0, "PLATINUM": 220.0, "DIAMOND": 300.0}
+INACTIVE_CARD_FACTOR = 0.5       # interchange falls when the member is inactive
 PAYROLL_FLOW_YIELD = 0.0035      # float / cross-sell yield on salary inflows
 CONTRIBUTION_MARGIN = 0.62       # after cost-to-serve
 DISCOUNT_RATE = 0.10
@@ -73,6 +85,17 @@ MAX_RETENTION = 0.97
 AGE_BINS = [0, 29, 39, 49, 59, 200]
 AGE_LABELS = ["18-29", "30-39", "40-49", "50-59", "60+"]
 
+# Raw Kaggle column -> engine column
+COLUMN_MAP = {
+    "CustomerId": "Customer_ID",
+    "Exited": "Churn_Status",
+    "Complain": "Complain",
+    "Satisfaction Score": "Satisfaction_Score",
+    "Card Type": "Card_Type",
+    "Point Earned": "Points_Earned",
+}
+DROP_COLUMNS = ["RowNumber", "Surname"]  # row index + personal name: no analytical value
+
 CATEGORICAL_DRIVERS = {
     "Geography": "Geography",
     "Gender": "Gender",
@@ -80,18 +103,43 @@ CATEGORICAL_DRIVERS = {
     "NumOfProducts": "Number of Products",
     "IsActiveMember": "Active Member Status",
     "HasCrCard": "Has Credit Card",
-    "Complaints_Flag": "Complaint Logged (12M)",
+    "Card_Type": "Card Type",
+    "Satisfaction_Score": "Satisfaction Score",
+    "Complain": "Complaint Logged",
 }
 CONTINUOUS_DRIVERS = {
     "Age": "Age",
-    "CreditScore": "Credit Score",
     "Balance": "Account Balance",
+    "CreditScore": "Credit Score",
     "EstimatedSalary": "Estimated Salary",
-    "Tenure_Months": "Tenure (Months)",
-    "Transaction_Decay_Score": "Transaction Decay Score",
-    "Monthly_Txn_Count": "Monthly Transaction Count",
-    "Balance_Change_90d_Pct": "90-Day Balance Change",
+    "Tenure": "Tenure (Years)",
+    "Points_Earned": "Loyalty Points Earned",
 }
+
+
+# =============================================================================
+# 0. Ingestion & data quality
+# =============================================================================
+def load_and_validate(path: Path) -> tuple[pd.DataFrame, dict[str, Any]]:
+    raw = pd.read_csv(path)
+    df = raw.drop(columns=[c for c in DROP_COLUMNS if c in raw.columns]).rename(columns=COLUMN_MAP)
+    df["Customer_ID"] = df["Customer_ID"].astype(str)
+    df["Card_Type"] = df["Card_Type"].str.upper().str.strip()
+
+    checks = {
+        "rows": int(len(df)),
+        "columns": int(raw.shape[1]),
+        "null_cells": int(raw.isna().sum().sum()),
+        "duplicate_customer_ids": int(df["Customer_ID"].duplicated().sum()),
+        "age_out_of_range": int((~df["Age"].between(18, 100)).sum()),
+        "credit_score_out_of_range": int((~df["CreditScore"].between(300, 900)).sum()),
+        "negative_balances": int((df["Balance"] < 0).sum()),
+        "zero_balance_share": round(float((df["Balance"] == 0).mean()), 4),
+        "dropped_columns": DROP_COLUMNS,
+    }
+    checks["passed"] = checks["null_cells"] == 0 and checks["duplicate_customer_ids"] == 0 and checks["negative_balances"] == 0
+    df = df.drop_duplicates("Customer_ID").dropna().reset_index(drop=True)
+    return df, checks
 
 
 # =============================================================================
@@ -100,21 +148,40 @@ CONTINUOUS_DRIVERS = {
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["Age_Tier"] = pd.cut(df["Age"], bins=AGE_BINS, labels=AGE_LABELS).astype(str)
-    df["Cohort_Year"] = pd.to_datetime(df["Join_Date"]).dt.year
-    df["Complaints_Flag"] = (df["Complaints_12M"] > 0).astype(int)
+    # Tenure is recorded in whole years; year 0 means < 12 months, so place it mid-year.
+    df["Tenure_Months"] = np.where(df["Tenure"] == 0, 6, df["Tenure"] * 12).astype(int)
+    df["Zero_Balance"] = (df["Balance"] == 0).astype(int)
 
-    card_revenue = np.where(df["IsActiveMember"] == 1, CARD_REVENUE_ACTIVE, CARD_REVENUE_INACTIVE)
+    card_fee = df["Card_Type"].map(CARD_FEES).fillna(0.0)
+    card_revenue = df["HasCrCard"] * card_fee * np.where(df["IsActiveMember"] == 1, 1.0, INACTIVE_CARD_FACTOR)
     df["Annual_Revenue"] = (
         df["Balance"] * NET_INTEREST_MARGIN
         + df["NumOfProducts"] * FEE_PER_PRODUCT
-        + df["HasCrCard"] * card_revenue
+        + card_revenue
         + df["EstimatedSalary"] * PAYROLL_FLOW_YIELD
     ).round(2)
     return df
 
 
 # =============================================================================
-# 2. Statistical hypothesis testing
+# 2. Target-leakage audit
+# =============================================================================
+def leakage_audit(df: pd.DataFrame) -> list[dict[str, Any]]:
+    """Single-feature ROC-AUC (direction-agnostic) for every candidate predictor."""
+    y = df["Churn_Status"].to_numpy()
+    out = []
+    for col in list(CATEGORICAL_DRIVERS) + list(CONTINUOUS_DRIVERS):
+        x = df[col]
+        if x.dtype == object:
+            x = x.map(df.groupby(col)["Churn_Status"].mean())  # target-rate encoding
+        auc = roc_auc_score(y, x.astype(float))
+        auc = max(auc, 1 - auc)
+        out.append({"feature": col, "single_feature_auc": round(float(auc), 4), "leakage": bool(auc >= LEAKAGE_AUC)})
+    return sorted(out, key=lambda r: r["single_feature_auc"], reverse=True)
+
+
+# =============================================================================
+# 3. Statistical hypothesis testing
 # =============================================================================
 def chi_square_tests(df: pd.DataFrame) -> list[dict[str, Any]]:
     """H0: churn is independent of the categorical driver."""
@@ -168,15 +235,17 @@ def t_tests(df: pd.DataFrame) -> list[dict[str, Any]]:
     return results
 
 
-def hypothesis_testing(df: pd.DataFrame) -> list[dict[str, Any]]:
+def hypothesis_testing(df: pd.DataFrame, leaky: set[str]) -> list[dict[str, Any]]:
     results = chi_square_tests(df) + t_tests(df)
     m = len(results)
     for r in results:
         r["p_value_adj"] = min(1.0, r["p_value"] * m)  # Bonferroni family-wise correction
         r["significant"] = bool(r["p_value_adj"] < ALPHA)
+        r["leakage"] = r["feature"] in leaky
         r["p_value"] = _safe_p(r["p_value"])
         r["p_value_adj"] = _safe_p(r["p_value_adj"])
-    return sorted(results, key=lambda r: abs(r["effect_size"]), reverse=True)
+    # Leaky columns go last: they're a data-quality finding, not a churn driver.
+    return sorted(results, key=lambda r: (r["leakage"], -abs(r["effect_size"])))
 
 
 def _safe_p(p: float) -> float:
@@ -185,7 +254,7 @@ def _safe_p(p: float) -> float:
 
 
 # =============================================================================
-# 3. Kaplan-Meier survival analysis
+# 4. Kaplan-Meier survival analysis
 # =============================================================================
 def _km_curve(durations: pd.Series, events: pd.Series, label: str) -> dict[str, Any]:
     kmf = KaplanMeierFitter(label=label)
@@ -224,6 +293,7 @@ def survival_analysis(df: pd.DataFrame) -> dict[str, Any]:
         "Geography": df["Geography"],
         "Products": df["NumOfProducts"].map(lambda k: f"{k} Product" + ("s" if k > 1 else "")),
         "Age Tier": df["Age_Tier"],
+        "Gender": df["Gender"],
     }
     for name, groups in segment_defs.items():
         curves = [_km_curve(T[groups == g], E[groups == g], str(g)) for g in sorted(groups.unique())]
@@ -237,67 +307,100 @@ def survival_analysis(df: pd.DataFrame) -> dict[str, Any]:
 
 
 # =============================================================================
-# 4. Churn propensity model
+# 5. Churn propensity models
 # =============================================================================
 MODEL_NUMERIC = [
-    "Age", "CreditScore", "Balance", "EstimatedSalary", "Tenure_Months", "HasCrCard",
-    "IsActiveMember", "Monthly_Txn_Count", "Transaction_Decay_Score", "Balance_Change_90d_Pct",
-    "Complaints_12M",
+    "Age", "Age_Sq", "CreditScore", "Balance", "Zero_Balance", "EstimatedSalary", "Tenure",
+    "HasCrCard", "IsActiveMember", "Satisfaction_Score", "Points_Earned",
 ]
-MODEL_CATEGORICAL = ["Geography", "Gender", "NumOfProducts"]
+MODEL_CATEGORICAL = ["Geography", "Gender", "NumOfProducts", "Card_Type"]
 
 
-def propensity_model(df: pd.DataFrame, seed: int = 42) -> tuple[np.ndarray, dict[str, Any]]:
-    X = df[MODEL_NUMERIC + MODEL_CATEGORICAL]
+def _model_frame(df: pd.DataFrame) -> pd.DataFrame:
+    X = df[[c for c in MODEL_NUMERIC if c != "Age_Sq"] + MODEL_CATEGORICAL].copy()
+    X["Age_Sq"] = (df["Age"] - 40) ** 2  # churn risk peaks in middle age -> quadratic term
+    return X[MODEL_NUMERIC + MODEL_CATEGORICAL]
+
+
+def propensity_model(df: pd.DataFrame, leaky: set[str], seed: int = 42) -> tuple[np.ndarray, dict[str, Any]]:
+    excluded = sorted(leaky)
+    assert not (set(MODEL_NUMERIC + MODEL_CATEGORICAL) & leaky), "leaky feature in model inputs"
+    X = _model_frame(df)
     y = df["Churn_Status"].to_numpy()
-
-    pipeline = Pipeline(
-        [
-            (
-                "prep",
-                ColumnTransformer(
-                    [
-                        ("num", StandardScaler(), MODEL_NUMERIC),
-                        ("cat", OneHotEncoder(handle_unknown="ignore", drop="first"), MODEL_CATEGORICAL),
-                    ]
-                ),
-            ),
-            ("clf", LogisticRegression(C=0.5, max_iter=2000, class_weight=None)),
-        ]
-    )
-
     cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=seed)
-    oof_proba = cross_val_predict(pipeline, X, y, cv=cv, method="predict_proba")[:, 1]
 
-    pipeline.fit(X, y)
-    names = pipeline.named_steps["prep"].get_feature_names_out()
-    coefs = pipeline.named_steps["clf"].coef_[0]
+    candidates = {
+        "Logistic Regression": Pipeline(
+            [
+                ("prep", ColumnTransformer([
+                    ("num", StandardScaler(), MODEL_NUMERIC),
+                    ("cat", OneHotEncoder(handle_unknown="ignore", drop="first"), MODEL_CATEGORICAL),
+                ])),
+                ("clf", LogisticRegression(C=0.5, max_iter=3000)),
+            ]
+        ),
+        "Gradient Boosting": Pipeline(
+            [
+                ("prep", ColumnTransformer([
+                    ("num", "passthrough", MODEL_NUMERIC),
+                    ("cat", OneHotEncoder(handle_unknown="ignore"), MODEL_CATEGORICAL),
+                ])),
+                ("clf", HistGradientBoostingClassifier(
+                    learning_rate=0.05, max_iter=300, max_leaf_nodes=15, min_samples_leaf=40,
+                    l2_regularization=1.0, random_state=seed,
+                )),
+            ]
+        ),
+    }
+
+    comparison, oof = [], {}
+    for name, pipe in candidates.items():
+        proba = cross_val_predict(pipe, X, y, cv=cv, method="predict_proba")[:, 1]
+        oof[name] = proba
+        comparison.append({
+            "model": name,
+            "roc_auc": round(float(roc_auc_score(y, proba)), 4),
+            "pr_auc": round(float(average_precision_score(y, proba)), 4),
+            "brier": round(float(brier_score_loss(y, proba)), 4),
+        })
+    best = max(comparison, key=lambda r: r["roc_auc"])
+
+    # Interpretability: odds ratios from the logistic model ...
+    lr = candidates["Logistic Regression"].fit(X, y)
+    names = lr.named_steps["prep"].get_feature_names_out()
     coefficients = sorted(
         (
-            {
-                "feature": n.replace("num__", "").replace("cat__", ""),
-                "coefficient": round(float(c), 4),
-                "odds_ratio": round(float(np.exp(c)), 4),
-            }
-            for n, c in zip(names, coefs)
+            {"feature": n.replace("num__", "").replace("cat__", ""), "coefficient": round(float(c), 4), "odds_ratio": round(float(np.exp(c)), 4)}
+            for n, c in zip(names, lr.named_steps["clf"].coef_[0])
         ),
         key=lambda d: abs(d["coefficient"]),
         reverse=True,
     )
+    # ... and permutation importance (drop in ROC-AUC) for the scoring model.
+    scorer = candidates[best["model"]].fit(X, y)
+    perm = permutation_importance(scorer, X, y, scoring="roc_auc", n_repeats=5, random_state=seed)
+    importance = sorted(
+        ({"feature": c, "importance": round(float(m), 4)} for c, m in zip(X.columns, perm.importances_mean)),
+        key=lambda d: d["importance"],
+        reverse=True,
+    )
 
     diagnostics = {
-        "algorithm": "L2-regularised Logistic Regression (C=0.5), standardised features",
+        "algorithm": f"{best['model']} (selected by out-of-fold ROC-AUC)",
         "validation": "5-fold stratified cross-validation (out-of-fold scoring)",
-        "roc_auc": round(float(roc_auc_score(y, oof_proba)), 4),
-        "pr_auc": round(float(average_precision_score(y, oof_proba)), 4),
+        "roc_auc": best["roc_auc"],
+        "pr_auc": best["pr_auc"],
         "base_rate": round(float(y.mean()), 4),
+        "comparison": comparison,
+        "excluded_features": excluded,
         "coefficients": coefficients,
+        "permutation_importance": importance,
     }
-    return oof_proba, diagnostics
+    return oof[best["model"]], diagnostics
 
 
 # =============================================================================
-# 5. LTV, risk scoring & next-best-action
+# 6. LTV, risk scoring & next-best-action
 # =============================================================================
 def _ltv(annual_margin: pd.Series, retention: pd.Series) -> pd.Series:
     """Retention-adjusted perpetuity: LTV = m * r / (1 + d - r)."""
@@ -309,16 +412,18 @@ def recommend_action(row: pd.Series) -> tuple[str, float, float]:
     """Rule-based next-best-action -> (action, expected save rate, cost per account)."""
     if row["NumOfProducts"] >= 3:
         return "Product Rationalisation Review", 0.30, 150.0
-    if row["Complaints_12M"] >= 2:
+    if row["Complain"] == 1:
         return "Priority Complaint Resolution + Goodwill Credit", 0.38, 120.0
-    if row["Balance"] >= 100_000 and row["Balance_Change_90d_Pct"] <= -0.15:
+    if row["Balance"] >= 100_000 and row["IsActiveMember"] == 0:
         return "Premium Savings Rate (+0.75% APY)", 0.42, 0.0075 * row["Balance"]
-    if row["IsActiveMember"] == 0 and row["Transaction_Decay_Score"] >= 0.5:
+    if row["IsActiveMember"] == 0:
         return "Relationship Manager Re-engagement Call", 0.33, 85.0
     if row["Age"] >= 50 and row["Balance"] > 0:
         return "Wealth & Retirement Advisory Session", 0.35, 200.0
     if row["NumOfProducts"] == 1:
         return "Bundle Cross-Sell with 12-Month Fee Waiver", 0.28, 110.0
+    if row["Satisfaction_Score"] <= 2:
+        return "Service Recovery Call", 0.25, 40.0
     if row["CreditScore"] < 580:
         return "Credit Health Programme + Fee Waiver", 0.22, 60.0
     return "Loyalty Rewards Boost", 0.20, 45.0
@@ -375,16 +480,15 @@ def to_dashboard_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
             "creditScore": df["CreditScore"],
             "tenure": df["Tenure"],
             "tenureMonths": df["Tenure_Months"],
-            "cohortYear": df["Cohort_Year"],
             "balance": df["Balance"].round(0),
             "products": df["NumOfProducts"],
             "hasCrCard": df["HasCrCard"],
             "isActive": df["IsActiveMember"],
             "salary": df["EstimatedSalary"].round(0),
-            "txnFreq": df["Monthly_Txn_Count"],
-            "txnDecay": df["Transaction_Decay_Score"].round(3),
-            "balanceChange": df["Balance_Change_90d_Pct"].round(3),
-            "complaints": df["Complaints_12M"],
+            "complain": df["Complain"],
+            "satisfaction": df["Satisfaction_Score"],
+            "cardType": df["Card_Type"].str.title(),
+            "points": df["Points_Earned"],
             "churned": df["Churn_Status"],
             "churnProb": df["Churn_Probability"].round(3),
             "riskTier": df["Risk_Tier"],
@@ -410,20 +514,32 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
-    raw = pd.read_csv(args.input)
-    print(f"[engine] loaded {len(raw):,} rows from {args.input}")
+    if not args.input.exists():
+        raise SystemExit(f"[engine] {args.input} not found - run: python scripts/fetch_kaggle_data.py")
 
-    df = engineer_features(raw)
+    df, quality = load_and_validate(args.input)
+    print(f"[engine] loaded {quality['rows']:,} rows from {args.input.name} · quality checks passed={quality['passed']}")
+
+    df = engineer_features(df)
+
+    print("[engine] auditing for target leakage...")
+    leakage = leakage_audit(df)
+    leaky = {r["feature"] for r in leakage if r["leakage"]}
+    for r in leakage:
+        if r["leakage"]:
+            print(f"[engine]   LEAKAGE: {r['feature']} alone reaches ROC-AUC {r['single_feature_auc']:.3f} -> excluded from model")
 
     print("[engine] running hypothesis tests (chi-square, Welch t)...")
-    tests = hypothesis_testing(df)
+    tests = hypothesis_testing(df, leaky)
 
     print("[engine] fitting Kaplan-Meier survival curves...")
     survival = survival_analysis(df)
 
-    print("[engine] training churn propensity model (5-fold OOF)...")
-    proba, diagnostics = propensity_model(df, seed=args.seed)
-    print(f"[engine]   ROC-AUC={diagnostics['roc_auc']:.3f}  PR-AUC={diagnostics['pr_auc']:.3f}")
+    print("[engine] comparing churn propensity models (5-fold OOF)...")
+    proba, diagnostics = propensity_model(df, leaky, seed=args.seed)
+    for row in diagnostics["comparison"]:
+        print(f"[engine]   {row['model']:<20} ROC-AUC={row['roc_auc']:.3f}  PR-AUC={row['pr_auc']:.3f}  Brier={row['brier']:.3f}")
+    print(f"[engine]   selected: {diagnostics['algorithm']}")
 
     print("[engine] scoring LTV, risk tiers and retention actions...")
     scored = score_customers(df, proba)
@@ -435,21 +551,26 @@ def main() -> None:
     model = {
         "meta": {
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "source": str(args.input.name),
+            "source": args.input.name,
+            "dataset": DATASET_NAME,
+            "dataset_url": DATASET_URL,
             "rows": int(len(scored)),
             "attrition_rate": round(float(scored["Churn_Status"].mean()), 4),
-            "engine_version": "1.0.0",
+            "engine_version": "2.0.0",
         },
+        "data_quality": quality,
+        "leakage_audit": leakage,
         "assumptions": {
             "net_interest_margin": NET_INTEREST_MARGIN,
             "fee_per_product": FEE_PER_PRODUCT,
-            "card_revenue_active": CARD_REVENUE_ACTIVE,
-            "card_revenue_inactive": CARD_REVENUE_INACTIVE,
+            "card_fees": CARD_FEES,
+            "inactive_card_factor": INACTIVE_CARD_FACTOR,
             "payroll_flow_yield": PAYROLL_FLOW_YIELD,
             "contribution_margin": CONTRIBUTION_MARGIN,
             "discount_rate": DISCOUNT_RATE,
             "max_retention": MAX_RETENTION,
             "ltv_formula": "LTV = annual_margin * r / (1 + d - r), r = 1 - churn_probability",
+            "tenure_months": "Tenure (whole years) x 12; tenure 0 mapped to 6 months",
         },
         "hypothesis_tests": tests,
         "survival": survival,

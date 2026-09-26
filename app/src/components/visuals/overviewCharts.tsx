@@ -5,7 +5,7 @@ import { Bar, BarChart, CartesianGrid, Cell, LabelList, ResponsiveContainer, Too
 import { useReport, useVisualRows } from "@/context/ReportContext";
 import { FIELDS, type FieldKey } from "@/lib/filters";
 import { fmtInt, fmtPct } from "@/lib/format";
-import { attritionBy, attritionMatrix, cohortRetention } from "@/lib/measures";
+import { attritionBy, attritionMatrix, segmentRetention } from "@/lib/measures";
 import { AXIS_TICK, PBI, SERIES_COLORS, sequentialBlue } from "@/lib/theme";
 import { Legend, PbiTooltip } from "./primitives";
 import { VisualContainer } from "./VisualContainer";
@@ -154,37 +154,52 @@ export function ProductHolding({ className }: { className?: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Cohort retention heatmap (Kaplan-Meier per join-year cohort)
+// Retention heatmap (Kaplan-Meier over tenure, per customer segment)
 // ---------------------------------------------------------------------------
-export function CohortHeatmap({ className }: { className?: string }) {
-  const id = "cohort-heatmap";
+const HEATMAP_DIMENSIONS: FieldKey[] = ["ageTier", "geography", "products", "memberStatus", "gender"];
+
+export function RetentionHeatmap({ className }: { className?: string }) {
+  const id = "retention-heatmap";
   const rows = useVisualRows(id);
-  const years = 8;
-  const data = useMemo(() => cohortRetention(rows, years), [rows]);
-  const [hover, setHover] = useState<{ cohort: number; year: number; v: number; n: number } | null>(null);
+  const years = 10;
+  const [dimension, setDimension] = useState<FieldKey>("ageTier");
+  const data = useMemo(() => segmentRetention(rows, dimension, years), [rows, dimension]);
+  const [hover, setHover] = useState<{ segment: string; year: number; v: number; n: number } | null>(null);
 
   // Colour scale spans the observed range so contrast is preserved under filters.
   const vals = data.flatMap((r) => r.cells.filter((v): v is number => v !== null));
   const min = vals.length ? Math.min(...vals) : 0;
   const max = vals.length ? Math.max(...vals) : 1;
   const norm = (v: number) => (max === min ? 1 : (v - min) / (max - min));
+  const dimLabel = FIELDS[dimension].label;
 
   return (
     <VisualContainer
       id={id}
       className={className}
-      title="Cohort Retention Heatmap"
-      subtitle="Kaplan-Meier retention by join-year cohort · % of cohort still banking after N years"
-      fields={["Customers[Join_Date].[Year]", "Customers[Tenure_Months]", "[KM Retention %]"]}
+      title="Retention Heatmap · Kaplan-Meier by Tenure Year"
+      subtitle={`% of customers still banking after N years of tenure, by ${dimLabel.toLowerCase()}`}
+      fields={[FIELDS[dimension].column, "Customers[Tenure]", "[KM Retention %]"]}
       tableRows={() =>
-        data.map((r) => ({ Cohort: r.cohort, Customers: r.customers, ...Object.fromEntries(r.cells.map((v, i) => [`Year ${i + 1}`, v === null ? null : Number(v.toFixed(4))])) }))
+        data.map((r) => ({ [dimLabel]: r.segment, Customers: r.customers, ...Object.fromEntries(r.cells.map((v, i) => [`Year ${i + 1}`, v === null ? null : Number(v.toFixed(4))])) }))
       }
     >
       <div className="pbi-scroll h-full overflow-auto">
-        <table className="w-full min-w-[520px] border-separate border-spacing-[2px] text-[11px]">
+        <div className="mb-1.5 flex flex-wrap gap-1 px-1" onClick={(e) => e.stopPropagation()}>
+          {HEATMAP_DIMENSIONS.map((d) => (
+            <button
+              key={d}
+              onClick={() => setDimension(d)}
+              className={`rounded-full border px-2.5 py-0.5 text-[11px] ${d === dimension ? "border-pbi-dark bg-pbi-dark text-white" : "border-pbi-line hover:bg-pbi-hover"}`}
+            >
+              {FIELDS[d].label}
+            </button>
+          ))}
+        </div>
+        <table className="w-full min-w-[560px] border-separate border-spacing-[2px] text-[11px]">
           <thead>
             <tr className="text-pbi-ink2">
-              <th className="px-2 py-1 text-left font-semibold">Cohort</th>
+              <th className="px-2 py-1 text-left font-semibold">{dimLabel}</th>
               <th className="px-2 py-1 text-right font-semibold">Customers</th>
               {Array.from({ length: years }, (_, i) => (
                 <th key={i} className="px-1 py-1 text-center font-semibold">Yr {i + 1}</th>
@@ -193,18 +208,18 @@ export function CohortHeatmap({ className }: { className?: string }) {
           </thead>
           <tbody>
             {data.map((r) => (
-              <tr key={r.cohort}>
-                <td className="px-2 font-semibold">{r.cohort}</td>
+              <tr key={r.segment}>
+                <td className="whitespace-nowrap px-2 font-semibold">{dimension === "products" ? `${r.segment} product${r.segment === "1" ? "" : "s"}` : r.segment}</td>
                 <td className="px-2 text-right tabular-nums text-pbi-ink2">{fmtInt(r.customers)}</td>
                 {r.cells.map((v, i) =>
                   v === null ? (
-                    <td key={i} className="h-7 rounded-[2px] bg-[#FAF9F8]" />
+                    <td key={i} className="h-8 rounded-[2px] bg-[#FAF9F8]" />
                   ) : (
                     <td
                       key={i}
-                      onMouseEnter={() => setHover({ cohort: r.cohort, year: i + 1, v, n: r.customers })}
+                      onMouseEnter={() => setHover({ segment: r.segment, year: i + 1, v, n: r.customers })}
                       onMouseLeave={() => setHover(null)}
-                      className="h-7 cursor-default rounded-[2px] text-center tabular-nums transition-[outline] hover:outline hover:outline-2 hover:outline-pbi-ink"
+                      className="h-8 cursor-default rounded-[2px] text-center tabular-nums transition-[outline] hover:outline hover:outline-2 hover:outline-pbi-ink"
                       style={{ background: sequentialBlue(norm(v)), color: norm(v) > 0.55 ? "#fff" : PBI.text }}
                     >
                       {Math.round(v * 100)}%
@@ -219,10 +234,10 @@ export function CohortHeatmap({ className }: { className?: string }) {
           <span>
             {hover ? (
               <>
-                <b className="text-pbi-ink">{hover.cohort}</b> cohort · Year {hover.year}: <b className="text-pbi-ink">{fmtPct(hover.v)}</b> retained ({fmtInt(hover.n)} customers)
+                <b className="text-pbi-ink">{hover.segment}</b> · after {hover.year} yr: <b className="text-pbi-ink">{fmtPct(hover.v)}</b> retained ({fmtInt(hover.n)} customers)
               </>
             ) : (
-              "Hover a cell for details · blank = not yet observable"
+              "Hover a cell for details · blank = fewer than 15 customers observed"
             )}
           </span>
           <span className="flex items-center gap-1.5">
@@ -256,7 +271,7 @@ export function AttritionByTenure({ className }: { className?: string }) {
       id={id}
       className={className}
       title="Attrition Rate by Tenure (Years)"
-      subtitle="Early-life customers carry the highest exit risk"
+      subtitle="Share of customers at each tenure who have exited"
       fields={["Customers[Tenure]", "[Attrition Rate %]"]}
       tableRows={() => data.map((d) => ({ "Tenure (Years)": d.tenure, Customers: d.n, "Attrition Rate": Number(d.rate.toFixed(4)) }))}
     >

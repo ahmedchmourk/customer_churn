@@ -1,6 +1,7 @@
 # ---------------------------------------------------------------------------
-# Analytics engine: generates the synthetic bank extract and publishes the
-# dashboard semantic model (customers.json / model.json) to /workspace/app/data.
+# Analytics engine: downloads the Kaggle "Bank Customer Churn" dataset and
+# publishes the dashboard semantic model (customers.json / model.json) to
+# /workspace/app/data.
 # ---------------------------------------------------------------------------
 FROM python:3.11-slim
 
@@ -16,4 +17,4 @@ RUN pip install --upgrade pip && pip install -r scripts/requirements.txt
 COPY scripts/ scripts/
 
 # Output paths are bind-mounted by docker-compose so results land on the host.
-CMD ["sh", "-c", "python scripts/generate_synthetic_bank_data.py --n ${N_CUSTOMERS:-10000} --seed ${SEED:-42} && python scripts/analytical_engine.py --seed ${SEED:-42}"]
+CMD ["sh", "-c", "python scripts/fetch_kaggle_data.py && python scripts/analytical_engine.py --seed ${SEED:-42}"]

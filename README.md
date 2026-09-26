@@ -1,45 +1,77 @@
 # Retail Bank Customer Churn & Lifetime Value (LTV) Diagnostic Analytics Dashboard
 
-An end-to-end churn analytics project: a **Python engine** (pandas · scipy · lifelines · scikit-learn) generates and analyses a 10,000-customer retail bank, and a **Next.js "Power BI Web Simulator"** presents the results in a report that looks and behaves like the Power BI Service. It runs on localhost and needs no Power BI licence.
+An end-to-end churn analytics project on **real customer data**: the Kaggle *Bank Customer Churn* dataset, with 10,000 customers of a European retail bank.
+
+- A **Python engine** (pandas · scipy · lifelines · scikit-learn) validates the data, audits it for target leakage, tests churn drivers, runs survival analysis, compares churn models and scores lifetime value.
+- A **Next.js "Power BI Web Simulator"** presents the results in a report that looks and behaves like the Power BI Service. It runs on localhost and needs no Power BI licence.
 
 ![Executive Attrition Overview](docs/screenshots/01-executive-overview.png)
 
 ---
 
-## Highlights
+## Data source
 
-| Layer | What it does |
+| | |
 |---|---|
-| **Synthetic data generator** | A survival-consistent simulation. Each customer gets a Weibull proportional-hazards time-to-churn built from known drivers (inactivity, product holding, age, geography). Customers are right-censored at the snapshot date. Behavioural leading indicators include "silent churners" who are still active but already disengaging. |
-| **Hypothesis testing** | χ² independence tests (with Cramér's V) and Welch t-tests (with Cohen's d) on 15 candidate drivers. P-values are Bonferroni-adjusted. |
-| **Survival analysis** | `lifelines` Kaplan-Meier curves with 95% CIs, overall and by segment, plus multivariate log-rank tests. |
-| **Propensity model** | L2 logistic regression. Scores are produced **out-of-fold** (5-fold stratified CV), so every probability is an unseen-data prediction. ROC-AUC ≈ 0.91. |
-| **LTV & risk scoring** | Margin-based, retention-adjusted LTV: `LTV = m·r / (1 + d − r)`. Also computes at-risk revenue, risk tiers, value tiers and a rule-based next-best retention action. |
-| **Power BI simulator** | Left nav, header and action bar, a collapsible filter pane (visual / page / all-pages scopes and search), bottom page tabs with zoom, cross-filtering, focus mode, "Show as a table", CSV export, drill-through, and a live data refresh. |
+| **Dataset** | [Bank Customer Churn · Kaggle (radheshyamkollipara)](https://www.kaggle.com/datasets/radheshyamkollipara/bank-customer-churn) |
+| **File** | `Customer-Churn-Records.csv`: 10,000 rows × 18 columns |
+| **Target** | `Exited` (1 = the customer left the bank). Attrition rate is **20.38%** |
+| **Quality** | No nulls, no duplicate customer IDs, no out-of-range values (checked on every run) |
+
+`scripts/fetch_kaggle_data.py` downloads the file from Kaggle's public API, validates the schema and row count, and prints a SHA-256 fingerprint. The dataset has no explicit redistribution licence, so **the raw file and its row-level derivatives are git-ignored**. They're fetched when the pipeline runs, and only code and aggregate screenshots live in this repo. `Surname` and `RowNumber` are dropped on ingestion.
+
+## Key findings
+
+| Finding | Evidence |
+|---|---|
+| **Product holding is the #1 driver.** 3–4 products churn at 83–100%; 2 products at only 7.6% | χ² Cramér's V 0.39 · top permutation importance |
+| **Middle age is the risk zone.** Churn peaks at 56% for ages 50–59 | Welch t (Cohen's d 0.74) · the model's quadratic age term |
+| **Germany churns at 2x** France and Spain (32% vs 16–17%) | χ² p < 0.001 · log-rank p < 0.001 |
+| **Inactive members churn at 1.9x** active ones | χ² V 0.16 · log-rank p < 0.001 |
+| **Some columns carry no signal:** tenure, credit score, salary, card type, satisfaction score and loyalty points | Bonferroni-adjusted p ≈ 1 |
+| **`Complain` is target leakage.** It matches `Exited` 99.9% of the time (single-feature ROC-AUC 0.998) | The leakage audit flags it and the engine excludes it from the model |
+
+The last finding matters. Keeping `Complain` would give a "99.8% accurate" model that is useless in production, because the complaint is recorded at or after exit. The engine detects this automatically, and the dashboard flags it in the hypothesis-testing table.
+
+---
+
+## Analytics pipeline
+
+| Step | What it does |
+|---|---|
+| **0 · Ingestion & data quality** | Maps Kaggle columns to the engine schema, drops personal and index columns, and checks nulls, duplicates and value ranges (`model.json → data_quality`). |
+| **1 · Feature engineering** | Age tiers, tenure in months (Kaggle records whole years; year 0 → 6 months), zero-balance flag, and **annual revenue**: 2.1% NIM on balance + $85 per product + card fee by card type + 0.35% salary-flow yield. |
+| **2 · Leakage audit** | Single-feature ROC-AUC for every column. Anything ≥ 0.95 is flagged and excluded from modelling. |
+| **3 · Hypothesis testing** | χ² independence tests with Cramér's V, and Welch t-tests with Cohen's d, across 15 drivers. P-values are Bonferroni-adjusted. |
+| **4 · Survival analysis** | `lifelines` Kaplan-Meier retention over tenure with 95% CIs, overall and by active status, geography, products, age tier and gender, plus multivariate log-rank tests. |
+| **5 · Propensity models** | Logistic regression vs. gradient boosting, compared on **5-fold stratified out-of-fold** predictions. The winner (gradient boosting, ROC-AUC **0.862**; logistic 0.842) scores every customer on data it never saw. Logistic odds ratios and permutation importance are exported for interpretability. |
+| **6 · LTV & risk scoring** | `LTV = m·r / (1 + d − r)` with r = 1 − churn probability and d = 10%. Also computes at-risk revenue, risk tiers, revenue-based value tiers, and a rule-based next-best retention action. |
+
+The financial assumptions (NIM, fees, margin, discount rate) are published in `model.json → assumptions`. They're illustrative, because the dataset doesn't contain revenue.
 
 ## Report pages
 
 1. **Executive Attrition Overview**
-   - KPI cards: attrition rate, lost balance, at-risk revenue, average LTV.
-   - Attrition by geography × age tier (click a column to cross-filter the page).
+   - KPI cards.
+   - Attrition by geography × age tier (click to cross-filter).
    - Product-holding small multiples.
-   - Kaplan-Meier cohort retention heatmap.
+   - **Kaplan-Meier retention heatmap** by segment and tenure year.
    - Attrition by tenure.
 2. **Diagnostic & Root-Cause Analytics**
-   - Simulated **Key Influencers** visual: lift and two-proportion z-tests, with *Key influencers* and *Top segments* tabs.
+   - Simulated **Key Influencers** visual: lift with two-proportion z-tests, plus *Top segments*.
    - KM survival curves with CI bands.
-   - Balance decay vs. transaction frequency scatter with a danger zone.
-   - **80/20 Pareto** of lost revenue.
-   - Hypothesis-testing results table.
+   - Age vs. balance churn-concentration scatter.
+   - Pareto of lost revenue.
+   - Hypothesis-testing table with the leakage flag.
 3. **Prescriptive Retention & What-If Planner**
-   - What-if sliders for churn reduction per value tier and a targeting threshold.
-   - Live KPIs: revenue saved, LTV preserved, cost, ROI.
-   - Baseline vs. scenario chart.
+   - Per-tier churn-reduction sliders and a targeting threshold.
+   - Live revenue saved, LTV uplift, cost and ROI.
    - Savings by action.
-   - Sortable, searchable **drill-through table** of high-LTV at-risk accounts.
+   - Sortable **drill-through table** of high-value at-risk accounts.
 4. **Customer Drill-through** (hidden page)
    - Profile, churn-probability gauge and active risk drivers.
-   - Behavioural benchmarks and the recommended action with its expected value.
+   - Benchmarks vs. retained and churned averages.
+   - The recommended action with its expected value.
 
 | | |
 |---|---|
@@ -56,28 +88,24 @@ An end-to-end churn analytics project: a **Python engine** (pandas · scipy · l
 docker compose -f docker/docker-compose.yml up --build
 ```
 
-The `analytics` container generates the data and runs the engine. When it finishes, the `web` container starts. Open **http://localhost:3000**.
-
-You can change the dataset size or seed with environment variables:
-
-```bash
-N_CUSTOMERS=25000 SEED=7 docker compose -f docker/docker-compose.yml up --build
-```
+The `analytics` container downloads the Kaggle dataset and runs the engine. When it finishes, the `web` container starts. Open **http://localhost:3000**.
 
 ### Option B: Local (Node 20+ and Python 3.9+)
 
 ```bash
-# 1. Analytics engine (optional: a pre-generated dataset ships in app/data)
+# 1. Data + analytics
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r scripts/requirements.txt
-python scripts/generate_synthetic_bank_data.py      # -> data/raw/bank_customers.csv
-python scripts/analytical_engine.py                 # -> app/data/{customers,model}.json
+python scripts/fetch_kaggle_data.py        # -> data/raw/Customer-Churn-Records.csv
+python scripts/analytical_engine.py        # -> app/data/{customers,model}.json
 
 # 2. Dashboard
 cd app
 npm install
-npm run dev                                         # http://localhost:3000
+npm run dev                                # http://localhost:3000
 ```
+
+**If Kaggle rejects the anonymous download**, create an API token (kaggle.com → Settings → API) and export `KAGGLE_USERNAME` and `KAGGLE_KEY`, or place the CSV at `data/raw/Customer-Churn-Records.csv` yourself.
 
 If you re-run the engine while the app is running, click the **Refresh** icon in the action bar. The dashboard reads the JSON at request time, so it doesn't need a rebuild.
 
@@ -86,14 +114,14 @@ If you re-run the engine while the app is running, click the **Refresh** icon in
 ## Architecture
 
 ```
-┌──────────────────────── scripts/ (Python) ────────────────────────┐
-│ generate_synthetic_bank_data.py ─► data/raw/bank_customers.csv    │
-│ analytical_engine.py                                              │
-│   1 feature engineering   2 χ² / Welch t-tests                    │
-│   3 Kaplan-Meier + log-rank   4 OOF logistic propensity           │
-│   5 LTV · risk tiers · next-best-action                           │
+Kaggle API ──► scripts/fetch_kaggle_data.py ──► data/raw/Customer-Churn-Records.csv
+                                                        │
+┌─────────────────── scripts/analytical_engine.py ──────▼───────────┐
+│ 0 quality checks   1 features   2 leakage audit                   │
+│ 3 χ² / Welch t   4 Kaplan-Meier + log-rank                        │
+│ 5 LR vs GBM (OOF)   6 LTV · risk · next-best-action               │
 │        ├─► app/data/customers.json  (row-level fact table)        │
-│        ├─► app/data/model.json      (tests, survival, model)      │
+│        ├─► app/data/model.json      (tests, survival, models)     │
 │        └─► data/processed/customers_enriched.csv                  │
 └───────────────────────────────────────────────────────────────────┘
                               │  GET /api/data/:dataset  (read at request time)
@@ -107,51 +135,55 @@ If you re-run the engine while the app is running, click the **Refresh** icon in
 └───────────────────────────────────────────────────────────────────┘
 ```
 
-**Design choice:** the heavy statistics run once in Python and are shipped as a semantic model. Measures such as attrition %, KM cohort retention, key-influencer lift, Pareto and the what-if simulation are computed in the browser against the current filter context, the same way Power BI evaluates DAX measures. That's why every slicer, filter-pane card and cross-filter updates the visuals instantly.
+**Design choice:** the heavy statistics run once in Python and are shipped as a semantic model. Measures such as attrition %, KM retention, key-influencer lift, Pareto and the what-if simulation are computed in the browser against the current filter context, the same way Power BI evaluates DAX. That's why every slicer, filter-pane card and cross-filter updates the visuals instantly.
 
 ### Repository layout
 
 ```
 ├── app/                      Next.js dashboard (TypeScript, Tailwind CSS v4, Recharts, Lucide)
-│   ├── data/                 engine output served by /api/data/*
+│   ├── data/                 engine output served by /api/data/* (git-ignored)
 │   └── src/{app,components,context,lib}
 ├── scripts/
-│   ├── generate_synthetic_bank_data.py
+│   ├── fetch_kaggle_data.py
 │   ├── analytical_engine.py
 │   └── requirements.txt
 ├── docker/
 │   ├── Dockerfile.analytics  python:3.11-slim engine image
 │   ├── Dockerfile.web        multi-stage Next.js standalone image
 │   └── docker-compose.yml
-├── data/                     raw + processed CSV extracts
+├── data/                     raw + processed CSVs (git-ignored)
 └── docs/screenshots/
 ```
 
-## Data dictionary (key fields)
+## Data dictionary
 
-| Field | Description |
-|---|---|
-| `Customer_ID`, `Age`, `Gender`, `Geography` | Demographics (France / Germany / Spain) |
-| `Tenure`, `Tenure_Months`, `Join_Date` | Relationship length; `Tenure_Months` is the survival duration |
-| `Balance`, `NumOfProducts`, `HasCrCard`, `IsActiveMember`, `EstimatedSalary`, `CreditScore` | Account and product holdings |
-| `Monthly_Txn_Count`, `Transaction_Decay_Score`, `Balance_Change_90d_Pct`, `Complaints_12M` | Behavioural leading indicators (90-day window) |
-| `Churn_Status` | 1 = churned within the observation window (survival event) |
-| `Churn_Probability` | Out-of-fold propensity score |
-| `Annual_Revenue`, `LTV`, `At_Risk_Revenue` | Revenue attribution and lifetime value |
-| `Risk_Tier`, `Value_Tier`, `Recommended_Action` | Scoring outputs used by the planner |
+| Kaggle column | Engine column | Description |
+|---|---|---|
+| `CustomerId` | `Customer_ID` | Anonymous customer identifier |
+| `CreditScore`, `Geography`, `Gender`, `Age` | same | Demographics and credit quality (France / Germany / Spain) |
+| `Tenure` | `Tenure`, `Tenure_Months` | Years as a customer; the survival duration |
+| `Balance`, `NumOfProducts`, `HasCrCard`, `IsActiveMember`, `EstimatedSalary` | same | Account and product holdings |
+| `Card Type`, `Point Earned` | `Card_Type`, `Points_Earned` | Card tier and loyalty points |
+| `Satisfaction Score` | `Satisfaction_Score` | 1–5 rating of complaint resolution |
+| `Complain` | `Complain` | Complaint logged. **Target leakage; excluded from the model** |
+| `Exited` | `Churn_Status` | Target: 1 = left the bank |
+| *(engine)* | `Churn_Probability`, `Annual_Revenue`, `LTV`, `At_Risk_Revenue`, `Risk_Tier`, `Value_Tier`, `Recommended_Action` | Scoring outputs |
 
-Financial assumptions (NIM, fees, margin, discount rate) are documented in `model.json → assumptions` and at the top of `analytical_engine.py`.
+## Limitations
+
+- **Snapshot data.** There are no transaction histories or join dates, so behavioural decay and true join-year cohorts can't be observed. The retention heatmap uses Kaplan-Meier over tenure by segment instead.
+- **Tenure is whole years**, so the survival curves step annually.
+- **Revenue and LTV use illustrative banking assumptions**, because the dataset has no financials.
 
 ---
 
 ## Using the simulator
 
 - **Slicers** on the canvas sync with the *Filters on all pages* cards in the filter pane.
-- **Page-level filters** (for example *Number of Products* on page 1) apply only to that page.
+- **Page-level filters** (for example *Card Type* on page 2) apply only to that page.
 - **Click a column** in *Attrition by Geography* or *Product Holding* to cross-filter the page. Click it again to clear.
 - **Hover a visual** for its header: filter peek, **focus mode**, and a **⋯** menu with *Show as a table* and *Export data*.
 - **Click a row** in the at-risk table to drill through to the customer. The **←** button returns you.
 - **Export → Analyze in Excel** downloads the currently filtered customer table as CSV.
-- **Zoom slider** (bottom right) and **View → Actual size** scale the canvas for screenshots.
 
-> *Disclaimer:* this is an independent portfolio project that recreates the look of the Power BI Service UI for demonstration purposes. It is not affiliated with or endorsed by Microsoft. All customer data is synthetic.
+> *Disclaimer:* this is an independent portfolio project that recreates the look of the Power BI Service UI for demonstration purposes. It is not affiliated with or endorsed by Microsoft. The dataset belongs to its Kaggle publisher and is downloaded at runtime, not redistributed.
